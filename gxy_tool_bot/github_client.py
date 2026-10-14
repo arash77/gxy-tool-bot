@@ -6,6 +6,7 @@ import io
 import logging
 import zipfile
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 
@@ -70,13 +71,24 @@ class GitHubClient:
             resp.raise_for_status()
         retry(_do)
 
+    def _label_exists(self, name: str) -> bool:
+        """True if the repo has a label with this exact name."""
+        resp = self._client.get(
+            f"https://api.github.com/repos/{self.repo}/labels/{quote(name, safe='')}"
+        )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
     def add_label(self, issue_number: int, label: str) -> None:
         """Add a label to an issue.
 
         Tries the given name, then its prefixed/legacy counterpart —
-        deployments may only have one spelling. A missing label is
-        informational, not fatal, so a total failure logs and returns rather
-        than breaking the calling reporting path.
+        deployments may only have one spelling. Real API failures (auth,
+        permissions, 5xx) propagate; only a repo missing both spellings is
+        tolerated, since a status label that doesn't exist anywhere is
+        informational, not actionable.
         """
         def _post(name: str) -> None:
             resp = self._client.post(
@@ -85,18 +97,17 @@ class GitHubClient:
             )
             resp.raise_for_status()
 
-        last_exc: Exception | None = None
         for name in labels_with_legacy(label):
-            try:
-                retry(lambda: _post(name))
-                return
-            except Exception as exc:
-                last_exc = exc
+            if not self._label_exists(name):
+                continue
+            retry(lambda: _post(name))
+            return
         logger.warning(
-            "Could not add label %r to issue #%d (tried both spellings): %s",
+            "Repo %s has neither label %r nor its alternate spelling — skipping "
+            "status label on issue #%d (create labels with scripts/create-labels.sh)",
+            self.repo,
             label,
             issue_number,
-            last_exc,
         )
 
     def get_issue(self, issue_number: int) -> Issue:
