@@ -21,7 +21,10 @@ on:
 jobs:
   address-feedback:
     name: Address PR Feedback
-    if: contains(github.event.pull_request.labels.*.name, 'address-feedback') || github.event_name == 'workflow_dispatch'
+    # Dual-match: both the prefixed (tool-bot:*) and original unprefixed label
+    # names trigger. If your repo only has the prefixed labels (e.g. created by
+    # scripts/create-labels.sh), you can drop the unprefixed alternative.
+    if: contains(github.event.pull_request.labels.*.name, 'tool-bot:address-feedback') || contains(github.event.pull_request.labels.*.name, 'address-feedback') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -63,6 +66,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Remove whichever spelling(s) exist — prefixed and legacy.
+          gh pr edit $PR_NUMBER \
+            --remove-label "tool-bot:address-feedback" || true
           gh pr edit $PR_NUMBER \
             --remove-label "address-feedback" || true
       - name: Find tool directory
@@ -160,7 +166,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f "$GITHUB_WORKSPACE/.validation-failed" ]; then
-            gh pr comment $PR_NUMBER --body "⚠️ Validation issues were found after addressing feedback. Add the \`address-feedback\` label to have the bot attempt fixes again."
+            gh pr comment $PR_NUMBER --body "⚠️ Validation issues were found after addressing feedback. Add the \`tool-bot:address-feedback\` (or \`address-feedback\`) label to have the bot attempt fixes again."
             rm -f "$GITHUB_WORKSPACE/.validation-failed"
           fi
       - name: Handle failure

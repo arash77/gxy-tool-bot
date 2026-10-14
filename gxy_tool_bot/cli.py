@@ -27,7 +27,7 @@ from gxy_tool_bot.autoupdate import (
     run_autoupdate,
     skip_dirs,
 )
-from gxy_tool_bot.config import load_config
+from gxy_tool_bot.config import labels_with_legacy, load_config
 from gxy_tool_bot.generator import GeneratedTool, generate_commit_message, generate_tool
 from gxy_tool_bot.github_client import GitHubClient
 from gxy_tool_bot.planner import (
@@ -122,7 +122,10 @@ def plan(issue: int, config_path: str) -> None:
 
     with GitHubClient(gh_token, config.repo) as gh:
         issue_data = gh.get_issue(issue)
-        is_update = config.labels.tool_update in issue_data.labels
+        is_update = any(
+            label in issue_data.labels
+            for label in labels_with_legacy(config.labels.tool_update)
+        )
 
         try:
             if is_update:
@@ -133,7 +136,8 @@ def plan(issue: int, config_path: str) -> None:
                         issue,
                         f"⚠️ Could not find tool directory `tools/{update_request.tool_dir or '(missing)'}/` "
                         "in this repo. Check the 'Tool directory' field on the issue, "
-                        "then add the `retry-plan` label to try again.",
+                        "then add the `tool-bot:retry-plan` (or `retry-plan`) "
+                        "label to try again.",
                     )
                     gh.add_label(issue, config.labels.generation_failed)
                     sys.exit(1)
@@ -147,7 +151,7 @@ def plan(issue: int, config_path: str) -> None:
                 plan_md, result = generate_plan(request, config, api_key)
         except Exception as exc:
             logger.exception("Plan generation failed")
-            gh.add_comment(issue, f"⚠️ Plan generation failed: {exc}\n\nAdd the `retry-plan` label to try again.")
+            gh.add_comment(issue, f"⚠️ Plan generation failed: {exc}\n\nAdd the `tool-bot:retry-plan` (or `retry-plan`) label to try again.")
             gh.add_label(issue, config.labels.generation_failed)
             sys.exit(2)
 
@@ -197,7 +201,10 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
 
     with GitHubClient(gh_token, config.repo) as gh:
         issue_data = gh.get_issue(issue)
-        is_update = config.labels.tool_update in issue_data.labels
+        is_update = any(
+            label in issue_data.labels
+            for label in labels_with_legacy(config.labels.tool_update)
+        )
         verb = "update" if is_update else "generate"
 
         comments = gh.get_issue_comments(issue)
@@ -219,7 +226,8 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                     issue,
                     f"⚠️ Could not find tool directory `tools/{tool_dir or '(missing)'}/` "
                     "in this repo. Fix the issue's 'Tool directory' field, "
-                    "then add the `retry-generate` label to try again.",
+                    "then add the `tool-bot:retry-generate` (or `retry-generate`) "
+                    "label to try again.",
                 )
                 gh.add_label(issue, config.labels.generation_failed)
                 sys.exit(1)
@@ -241,7 +249,8 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                 logger.exception("Tool update failed")
                 gh.add_comment(
                     issue,
-                    f"⚠️ Tool update failed: {exc}\n\nAdd the `retry-generate` label to try again.",
+                    f"⚠️ Tool update failed: {exc}\n\nAdd the `tool-bot:retry-generate` "
+                    "(or `retry-generate`) label to try again.",
                 )
                 gh.add_label(issue, config.labels.generation_failed)
                 sys.exit(2)
@@ -257,7 +266,7 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                 )
             except Exception as exc:
                 logger.exception("Tool generation failed")
-                gh.add_comment(issue, f"⚠️ Tool generation failed: {exc}\n\nAdd the `retry-generate` label to try again.")
+                gh.add_comment(issue, f"⚠️ Tool generation failed: {exc}\n\nAdd the `tool-bot:retry-generate` (or `retry-generate`) label to try again.")
                 gh.add_label(issue, config.labels.generation_failed)
                 sys.exit(2)
 
@@ -284,7 +293,8 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                 issue,
                 f"⚠️ Tool {verb} could not be completed. The agent reported:\n\n"
                 f"> {generated.give_up_reason}\n\n"
-                "A maintainer review is needed. Add the `retry-generate` label to try again.",
+                "A maintainer review is needed. Add the `tool-bot:retry-generate` "
+                "(or `retry-generate`) label to try again.",
             )
             gh.add_label(issue, config.labels.generation_failed)
             click.echo(f"Agent gave up: {generated.give_up_reason}", err=True)
@@ -299,8 +309,8 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
             validation_errors = validation.errors
             error_msg = (
                 f"⚠️ {'Update' if is_update else 'Generation'} completed but validation "
-                "found errors. A PR will still be created — use the `address-feedback` "
-                "label to have the bot fix these:\n\n"
+                "found errors. A PR will still be created — use the `tool-bot:address-feedback` "
+                "(or `address-feedback`) label to have the bot fix these:\n\n"
             )
             for err in validation.errors:
                 error_msg += f"- {err}\n"
@@ -341,7 +351,7 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                     Path(commit_msg_path).write_text(commit_msg)
                 if pr_body_path:
                     if validation_errors:
-                        pr_body += "\n\n---\n\n## ⚠️ Validation Issues\n\nThe following validation issues were found and should be addressed (use the `address-feedback` label to trigger fixes):\n\n"
+                        pr_body += "\n\n---\n\n## ⚠️ Validation Issues\n\nThe following validation issues were found and should be addressed (use the `tool-bot:address-feedback` (or `address-feedback`) label to trigger fixes):\n\n"
                         for err in validation_errors:
                             pr_body += f"- {err}\n"
                     pr_body += _contributing_section(issue, tool_dir, config.repo)
@@ -354,7 +364,7 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                         f"for issue #{issue}"
                     )
                     if validation_errors:
-                        fallback_body += "\n\n---\n\n## ⚠️ Validation Issues\n\nThe following validation issues were found and should be addressed (use the `address-feedback` label to trigger fixes):\n\n"
+                        fallback_body += "\n\n---\n\n## ⚠️ Validation Issues\n\nThe following validation issues were found and should be addressed (use the `tool-bot:address-feedback` (or `address-feedback`) label to trigger fixes):\n\n"
                         for err in validation_errors:
                             fallback_body += f"- {err}\n"
                     fallback_body += _contributing_section(issue, tool_dir, config.repo)
@@ -574,7 +584,7 @@ def address_feedback_cmd(pr_number: int, config_path: str, tool_dir: str, actor:
         validation_errors: list[str] | None = None
         if not validation.valid:
             validation_errors = validation.errors
-            error_msg = "⚠️ Feedback addressed but validation found errors. Changes will still be committed — use the `address-feedback` label again to have the bot fix these:\n\n"
+            error_msg = "⚠️ Feedback addressed but validation found errors. Changes will still be committed — use the `tool-bot:address-feedback` (or `address-feedback`) label again to have the bot fix these:\n\n"
             for err in validation.errors:
                 error_msg += f"- {err}\n"
             gh.add_comment(pr_number, error_msg)

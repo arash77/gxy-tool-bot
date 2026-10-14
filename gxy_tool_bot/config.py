@@ -35,17 +35,34 @@ class ExemplarConfig:
     shed_yml: str | None = None
 
 
+# Canonical prefix for the labels the bot creates/triggers on. The original
+# unprefixed names (e.g. "tool-request") are still honored alongside the
+# prefixed ones — see labels_with_legacy() below.
+TOOL_BOT_LABEL_PREFIX = "tool-bot:"
+
+
+def labels_with_legacy(name: str) -> list[str]:
+    """Return a label name plus its prefixed/legacy counterpart.
+
+    Deployments created before the tool-bot: prefix may only have the
+    unprefixed labels, and vice versa — check both spellings.
+    """
+    if name.startswith(TOOL_BOT_LABEL_PREFIX):
+        return [name, name[len(TOOL_BOT_LABEL_PREFIX):]]
+    return [name, TOOL_BOT_LABEL_PREFIX + name]
+
+
 @dataclass
 class LabelConfig:
-    request: str = "tool-request"
+    request: str = "tool-bot:tool-request"
     # Applied by the "Tool Update" issue template — routes the issue through the
     # same plan/generate pipeline, but with the update variants.
-    tool_update: str = "tool-update"
-    plan_ready: str = "plan-ready"
-    ready_to_implement: str = "ready-to-implement"
-    pr_opened: str = "pr-opened"
-    generation_failed: str = "generation-failed"
-    review: str = "review"
+    tool_update: str = "tool-bot:tool-update"
+    plan_ready: str = "tool-bot:plan-ready"
+    ready_to_implement: str = "tool-bot:ready-to-implement"
+    pr_opened: str = "tool-bot:pr-opened"
+    generation_failed: str = "tool-bot:generation-failed"
+    review: str = "tool-bot:review"
 
 
 @dataclass
@@ -137,13 +154,13 @@ def load_config(path: Path) -> BotConfig:
 
     labels_raw = raw.get("labels", {})
     labels = LabelConfig(
-        request=labels_raw.get("request", "tool-request"),
-        tool_update=labels_raw.get("tool_update", "tool-update"),
-        plan_ready=labels_raw.get("plan_ready", "plan-ready"),
-        ready_to_implement=labels_raw.get("ready_to_implement", "ready-to-implement"),
-        pr_opened=labels_raw.get("pr_opened", "pr-opened"),
-        generation_failed=labels_raw.get("generation_failed", "generation-failed"),
-        review=labels_raw.get("review", "review"),
+        request=labels_raw.get("request", LabelConfig.request),
+        tool_update=labels_raw.get("tool_update", LabelConfig.tool_update),
+        plan_ready=labels_raw.get("plan_ready", LabelConfig.plan_ready),
+        ready_to_implement=labels_raw.get("ready_to_implement", LabelConfig.ready_to_implement),
+        pr_opened=labels_raw.get("pr_opened", LabelConfig.pr_opened),
+        generation_failed=labels_raw.get("generation_failed", LabelConfig.generation_failed),
+        review=labels_raw.get("review", LabelConfig.review),
     )
 
     autoupdate_raw = raw.get("autoupdate") or {}

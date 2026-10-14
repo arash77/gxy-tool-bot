@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from gxy_tool_bot.config import labels_with_legacy
 from gxy_tool_bot.retry import retry
 
 logger = logging.getLogger(__name__)
@@ -70,14 +71,33 @@ class GitHubClient:
         retry(_do)
 
     def add_label(self, issue_number: int, label: str) -> None:
-        """Add a label to an issue."""
-        def _do() -> None:
+        """Add a label to an issue.
+
+        Tries the given name, then its prefixed/legacy counterpart —
+        deployments may only have one spelling. A missing label is
+        informational, not fatal, so a total failure logs and returns rather
+        than breaking the calling reporting path.
+        """
+        def _post(name: str) -> None:
             resp = self._client.post(
                 f"https://api.github.com/repos/{self.repo}/issues/{issue_number}/labels",
-                json={"labels": [label]},
+                json={"labels": [name]},
             )
             resp.raise_for_status()
-        retry(_do)
+
+        last_exc: Exception | None = None
+        for name in labels_with_legacy(label):
+            try:
+                retry(lambda: _post(name))
+                return
+            except Exception as exc:
+                last_exc = exc
+        logger.warning(
+            "Could not add label %r to issue #%d (tried both spellings): %s",
+            label,
+            issue_number,
+            last_exc,
+        )
 
     def get_issue(self, issue_number: int) -> Issue:
         """Fetch issue details (title, body, labels)."""

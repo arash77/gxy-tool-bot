@@ -1,6 +1,8 @@
 name: Tool Request
 description: Request a new Galaxy tool wrapper to be generated
-labels: ["tool-request"]
+# Prefixed label is canonical. If your repo uses the legacy unprefixed labels,
+# change this to "tool-request".
+labels: ["tool-bot:tool-request"]
 body:
   - type: markdown
     attributes:

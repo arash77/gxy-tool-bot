@@ -46,8 +46,8 @@ def test_load_valid_config(tmp_path: Path) -> None:
 
     assert config.repo == "owner/repo"
 
-    assert config.labels.request == "tool-request"
-    assert config.labels.generation_failed == "generation-failed"
+    assert config.labels.request == "tool-bot:tool-request"
+    assert config.labels.generation_failed == "tool-bot:generation-failed"
 
     assert config.allowed_maintainers is None
 
@@ -189,7 +189,7 @@ def test_load_config_custom_labels(tmp_path: Path) -> None:
     assert config.labels.request == "custom-request"
     assert config.labels.plan_ready == "custom-plan-ready"
     # Defaults for unspecified labels
-    assert config.labels.ready_to_implement == "ready-to-implement"
+    assert config.labels.ready_to_implement == "tool-bot:ready-to-implement"
 
 
 def test_load_config_allowed_maintainers(tmp_path: Path) -> None:

@@ -1,6 +1,8 @@
 name: Tool Update
 description: Request an update to an existing Galaxy tool wrapper
-labels: ["tool-update"]
+# Prefixed label is canonical. If your repo uses the legacy unprefixed labels,
+# change this to "tool-update".
+labels: ["tool-bot:tool-update"]
 body:
   - type: markdown
     attributes:

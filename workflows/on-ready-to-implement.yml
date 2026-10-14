@@ -21,8 +21,13 @@ on:
 jobs:
   generate:
     name: Generate Tool Files
+    # Dual-match: both the prefixed (tool-bot:*) and original unprefixed label
+    # names trigger. If your repo only has the prefixed labels (e.g. created by
+    # scripts/create-labels.sh), you can drop the unprefixed alternatives.
     if: |
+      github.event.label.name == 'tool-bot:ready-to-implement' ||
       github.event.label.name == 'ready-to-implement' ||
+      github.event.label.name == 'tool-bot:retry-generate' ||
       github.event.label.name == 'retry-generate' ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -54,12 +59,17 @@ jobs:
           curl -Ls "https://micro.mamba.pm/api/micromamba/linux-64/latest" | tar -xvj -C /tmp
           echo "/tmp/bin" >> $GITHUB_PATH
       - name: Remove retry-generate and generation-failed labels
-        if: github.event.label.name == 'retry-generate'
+        if: github.event.label.name == 'tool-bot:retry-generate' || github.event.label.name == 'retry-generate'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Remove whichever spelling(s) exist — prefixed and legacy.
+          gh issue edit $ISSUE_NUMBER \
+            --remove-label "tool-bot:retry-generate" || true
           gh issue edit $ISSUE_NUMBER \
             --remove-label "retry-generate" || true
+          gh issue edit $ISSUE_NUMBER \
+            --remove-label "tool-bot:generation-failed" || true
           gh issue edit $ISSUE_NUMBER \
             --remove-label "generation-failed" || true
       - name: Generate tool files
@@ -128,7 +138,7 @@ jobs:
             # update, or regenerates identical files) — commit and PR creation
             # would both fail on an empty diff.
             echo "No changes to commit — skipping PR creation"
-            gh issue comment $ISSUE_NUMBER --body "⚠️ Bot finished but produced no changes to \`tools/$TOOL_DIR/\` — nothing to commit. Add the \`retry-generate\` label to try again."
+            gh issue comment $ISSUE_NUMBER --body "⚠️ Bot finished but produced no changes to \`tools/$TOOL_DIR/\` — nothing to commit. Add the \`tool-bot:retry-generate\` (or \`retry-generate\`) label to try again."
           else
           # Use LLM-generated commit message if available, otherwise fallback
           # (.is-update is written by the CLI for tool-update issues)
@@ -170,7 +180,10 @@ jobs:
             PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
             gh issue comment $ISSUE_NUMBER --body "✅ Tool generated successfully — PR #$PR_NUMBER is ready for review."
           fi
-          gh issue edit $ISSUE_NUMBER --add-label "pr-opened"
+          # Prefixed label is canonical; fall back to the legacy name if the
+          # prefixed one doesn't exist in this repo.
+          gh issue edit $ISSUE_NUMBER --add-label "tool-bot:pr-opened" 2>/dev/null || \
+            gh issue edit $ISSUE_NUMBER --add-label "pr-opened"
           fi
           # If some files were gitignored, post a comment for human review
           if [ -n "$IGNORED_FILES" ] && [ -n "$PR_NUMBER" ]; then
@@ -200,7 +213,7 @@ jobs:
           if [ -f "$GITHUB_WORKSPACE/.validation-failed" ]; then
             PR_NUMBER=$(gh pr list --head "tool-bot/issue-$ISSUE_NUMBER" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
             if [ -n "$PR_NUMBER" ]; then
-              gh pr comment "$PR_NUMBER" --body "⚠️ Validation issues were found during generation. See the PR description for details, or add the \`address-feedback\` label to have the bot attempt fixes."
+              gh pr comment "$PR_NUMBER" --body "⚠️ Validation issues were found during generation. See the PR description for details, or add the \`tool-bot:address-feedback\` (or \`address-feedback\`) label to have the bot attempt fixes."
             fi
           fi
           rm -f "$GITHUB_WORKSPACE/.validation-failed"
@@ -214,13 +227,15 @@ jobs:
             # the label — don't post a second, contradictory comment.
             rm -f "$GITHUB_WORKSPACE/.gave-up"
           else
-            gh issue comment $ISSUE_NUMBER --body "⚠️ Tool generation failed. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Add the \`retry-generate\` label to try again."
-            gh issue edit $ISSUE_NUMBER --add-label "generation-failed"
+            gh issue comment $ISSUE_NUMBER --body "⚠️ Tool generation failed. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Add the \`tool-bot:retry-generate\` (or \`retry-generate\`) label to try again."
+            gh issue edit $ISSUE_NUMBER --add-label "tool-bot:generation-failed" 2>/dev/null || \
+              gh issue edit $ISSUE_NUMBER --add-label "generation-failed"
           fi
       - name: Handle PR creation failure
         if: steps.create_pr.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue comment $ISSUE_NUMBER --body "⚠️ Files were generated but PR creation failed. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Add the \`retry-generate\` label to try again."
-          gh issue edit $ISSUE_NUMBER --add-label "generation-failed"
+          gh issue comment $ISSUE_NUMBER --body "⚠️ Files were generated but PR creation failed. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Add the \`tool-bot:retry-generate\` (or \`retry-generate\`) label to try again."
+          gh issue edit $ISSUE_NUMBER --add-label "tool-bot:generation-failed" 2>/dev/null || \
+            gh issue edit $ISSUE_NUMBER --add-label "generation-failed"

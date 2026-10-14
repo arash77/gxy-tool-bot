@@ -5,7 +5,10 @@ on:
 jobs:
   review:
     name: Review Tool Files
-    if: contains(github.event.pull_request.labels.*.name, 'review')
+    # Dual-match: both the prefixed (tool-bot:*) and original unprefixed label
+    # names trigger. If your repo only has the prefixed labels (e.g. created by
+    # scripts/create-labels.sh), you can drop the unprefixed alternative.
+    if: contains(github.event.pull_request.labels.*.name, 'tool-bot:review') || contains(github.event.pull_request.labels.*.name, 'review')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,6 +47,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Remove whichever spelling(s) exist — prefixed and legacy.
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --remove-label "tool-bot:review" || true
           gh pr edit ${{ github.event.pull_request.number }} \
             --remove-label "review" || true
       - name: Find tool directory
