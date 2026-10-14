@@ -132,6 +132,23 @@ deployments keep working unchanged. If you know your repo only has the
 prefixed labels, you can drop the unprefixed alternative from each `if:`
 predicate.
 
+> **Pinned-version caveat:** workflows `pip install gxy-tool-bot==<ver>`, and
+> the *installed package* does its own label reads/writes. Prefixed-label
+> support lands in releases after 0.1.2 — if your workflow pins 0.1.2 or
+> earlier and your repo only has `tool-bot:*` labels, either use the legacy
+> names or map them in `.gxy-tool-bot.yml`:
+>
+> ```yaml
+> labels:
+>   request: tool-bot:tool-request
+>   tool_update: tool-bot:tool-update
+>   plan_ready: tool-bot:plan-ready
+>   ready_to_implement: tool-bot:ready-to-implement
+>   pr_opened: tool-bot:pr-opened
+>   generation_failed: tool-bot:generation-failed
+>   review: tool-bot:review
+> ```
+
 ### 4. Add the issue templates
 
 Copy the templates from `examples/` in this repo into your repo's `.github/ISSUE_TEMPLATE/`:

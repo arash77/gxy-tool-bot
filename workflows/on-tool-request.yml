@@ -8,6 +8,10 @@ jobs:
     # Dual-match: both the prefixed (tool-bot:*) and original unprefixed label
     # names trigger. If your repo only has the prefixed labels (e.g. created by
     # scripts/create-labels.sh), you can drop the unprefixed alternatives.
+    # Note: the pinned CLI learns the prefixed names in releases after 0.1.2 —
+    # on older pins, prefixed labels need a `labels:` override in
+    # .gxy-tool-bot.yml (or keep the legacy names), else update issues
+    # misroute to the new-tool flow and plan-ready label writes 422.
     if: |
       (github.event.action == 'opened' &&
        (contains(github.event.issue.labels.*.name, 'tool-bot:tool-request') ||
