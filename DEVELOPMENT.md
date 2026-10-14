@@ -101,7 +101,7 @@ in `gxy_tool_bot/address_feedback.py`. The system prompt is in
 
 ### The update flow
 
-A `tool-update` issue label routes the issue through the existing `plan` and
+A `tool-bot:tool-update` (or legacy `tool-update`) issue label routes the issue through the existing `plan` and
 `generate` CLI commands, which detect the label and branch internally — no
 extra workflows or CLI commands. `plan` calls `generate_update_plan`
 (`gxy_tool_bot/planner.py`) which parses the issue with
@@ -118,13 +118,17 @@ Budget knobs are the same as generate: `max_tool_iterations`,
 `max_validation_retries`, and `validation_retries_per_extra_tool_xml` — for
 updates the scaling counts tool XMLs in the existing dir
 (`count_tool_xmls_in_dir`) instead of the plan. The only new config key is
-`labels.tool_update` (default `tool-update`).
+`labels.tool_update` (default `tool-bot:tool-update`).
 
 Note: `labels.*` config only affects CLI-side detection — GitHub Actions
 evaluates issue labels before the CLI runs, so the workflow `if:`
-predicates hard-code the default label names (`tool-request`,
-`tool-update`). Renaming a label in `.gxy-tool-bot.yml` means updating the
-matching predicate in `on-tool-request.yml` (and the issue template) too.
+predicates hard-code the label names. All workflow predicates dual-match
+the canonical `tool-bot:*` names and the original unprefixed names, so
+either spelling triggers. Renaming a label to something else entirely in
+`.gxy-tool-bot.yml` means updating the matching predicate in
+`on-tool-request.yml` (and the issue template) too. CLI-side label reads
+and writes likewise try both spellings (`labels_with_legacy` in
+`gxy_tool_bot/config.py`, `GitHubClient.add_label`).
 
 ### The autoupdate flow
 

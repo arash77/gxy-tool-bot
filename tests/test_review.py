@@ -320,7 +320,7 @@ def test_config_review_defaults(tmp_path: Path) -> None:
     config = load_config(config_path)
     assert config.integrated_review_mode == "never"
     assert config.max_review_fix_rounds == 1
-    assert config.labels.review == "review"
+    assert config.labels.review == "tool-bot:review"
 
 
 def test_config_review_custom(tmp_path: Path) -> None:

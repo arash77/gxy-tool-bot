@@ -15,11 +15,11 @@ This repository is under active development. The bot can plan tool wrappers, gen
 ## How it works
 
 1. **Request:** Users file a GitHub issue using the "Tool Request" issue template (structured fields for tool name, description, links, contact).
-2. **Plan:** The `tool-request` label triggers a workflow. An agent researches the tool (bioconda, GitHub, publications, web) and posts a plan as an issue comment with a `plan-ready` label.
-3. **Review:** A maintainer reviews the plan and adds the `ready-to-implement` label.
-4. **Generate:** An agent generates the tool XML, macros, and test data, then opens a PR with a `pr-opened` label on the issue. If the agent gives up or crashes, a `generation-failed` label is applied instead. If generation completes but validation finds issues, the PR is still created with the validation errors noted in the description — apply the `address-feedback` label to have the bot attempt fixes.
+2. **Plan:** The `tool-bot:tool-request` label triggers a workflow. An agent researches the tool (bioconda, GitHub, publications, web) and posts a plan as an issue comment with a `tool-bot:plan-ready` label.
+3. **Review:** A maintainer reviews the plan and adds the `tool-bot:ready-to-implement` label.
+4. **Generate:** An agent generates the tool XML, macros, and test data, then opens a PR with a `tool-bot:pr-opened` label on the issue. If the agent gives up or crashes, a `tool-bot:generation-failed` label is applied instead. If generation completes but validation finds issues, the PR is still created with the validation errors noted in the description — apply the `tool-bot:address-feedback` label to have the bot attempt fixes.
 
-**Updating existing tools** follows the same plan → `ready-to-implement` → PR flow: a user files a "Tool Update" issue (auto-labeled `tool-update`) naming the tool directory and what to change, the bot posts an update plan, a maintainer approves, and the bot stages the existing `tools/<dir>` into its workspace, applies the plan, and opens a PR.
+**Updating existing tools** follows the same plan → `tool-bot:ready-to-implement` → PR flow: a user files a "Tool Update" issue (auto-labeled `tool-bot:tool-update`) naming the tool directory and what to change, the bot posts an update plan, a maintainer approves, and the bot stages the existing `tools/<dir>` into its workspace, applies the plan, and opens a PR.
 
 ## Setup (for consuming repos)
 
@@ -103,36 +103,67 @@ autoupdate:
 
 ### 3. Create GitHub labels
 
-Create these labels in the repo (Settings → Labels):
+Run the helper script against your repo (requires the [`gh`](https://cli.github.com) CLI):
+
+```bash
+scripts/create-labels.sh owner/repo
+```
+
+It's idempotent (`gh label create --force`), so re-running is safe. It creates these labels:
 
 | Label | Color | Purpose |
 |-------|-------|---------|
-| `tool-request` | `#0075ca` | Applied automatically by issue template; triggers planning |
-| `tool-update` | `#0075ca` | Applied automatically by the Tool Update issue template; triggers update planning |
-| `plan-ready` | `#a2eeef` | Applied by bot after plan is posted |
-| `ready-to-implement` | `#0e8a16` | Applied by maintainer to approve plan; triggers generation |
-| `pr-opened` | `#1d76db` | Applied by bot after PR is created |
-| `generation-failed` | `#b60205` | Applied by bot if generation or planning fails |
-| `retry-plan` | `#fbca04` | Applied by user/maintainer to re-trigger planning after a failure |
-| `retry-generate` | `#fbca04` | Applied by user/maintainer to re-trigger generation after a failure |
-| `address-feedback` | `#5319e7` | Applied to a PR to have the bot address review comments and CI failures |
-| `review` | `#bfd4f2` | Applied to a PR to have the bot review tool files and post findings |
+| `tool-bot:tool-request` | `#0075ca` | Applied automatically by issue template; triggers planning |
+| `tool-bot:tool-update` | `#0075ca` | Applied automatically by the Tool Update issue template; triggers update planning |
+| `tool-bot:plan-ready` | `#a2eeef` | Applied by bot after plan is posted |
+| `tool-bot:ready-to-implement` | `#0e8a16` | Applied by maintainer to approve plan; triggers generation |
+| `tool-bot:pr-opened` | `#1d76db` | Applied by bot after PR is created |
+| `tool-bot:generation-failed` | `#b60205` | Applied by bot if generation or planning fails |
+| `tool-bot:retry-plan` | `#fbca04` | Applied by user/maintainer to re-trigger planning after a failure |
+| `tool-bot:retry-generate` | `#fbca04` | Applied by user/maintainer to re-trigger generation after a failure |
+| `tool-bot:address-feedback` | `#5319e7` | Applied to a PR to have the bot address review comments and CI failures |
+| `tool-bot:review` | `#bfd4f2` | Applied to a PR to have the bot review tool files and post findings |
+
+The prefixed names avoid collisions with generic labels on busy repos (e.g. a
+plain `review` label applied for unrelated reasons would trigger a bot run).
+For backward compatibility, the workflow templates and CLI also match the
+original unprefixed names (`tool-request`, `review`, etc.) — existing
+deployments keep working unchanged. If you know your repo only has the
+prefixed labels, you can drop the unprefixed alternative from each `if:`
+predicate.
+
+> **Pinned-version caveat:** workflows `pip install gxy-tool-bot==<ver>`, and
+> the *installed package* does its own label reads/writes. Prefixed-label
+> support lands in releases after 0.1.2 — if your workflow pins 0.1.2 or
+> earlier and your repo only has `tool-bot:*` labels, either use the legacy
+> names or map them in `.gxy-tool-bot.yml`:
+>
+> ```yaml
+> labels:
+>   request: tool-bot:tool-request
+>   tool_update: tool-bot:tool-update
+>   plan_ready: tool-bot:plan-ready
+>   ready_to_implement: tool-bot:ready-to-implement
+>   pr_opened: tool-bot:pr-opened
+>   generation_failed: tool-bot:generation-failed
+>   review: tool-bot:review
+> ```
 
 ### 4. Add the issue templates
 
 Copy the templates from `examples/` in this repo into your repo's `.github/ISSUE_TEMPLATE/`:
 
-- `issue-template-tool-request.yml` → `tool-request.yml` — auto-applies `tool-request`, triggers planning
-- `issue-template-tool-update.yml` → `tool-update.yml` — auto-applies `tool-update`, triggers update planning
+- `issue-template-tool-request.yml` → `tool-request.yml` — auto-applies `tool-bot:tool-request`, triggers planning
+- `issue-template-tool-update.yml` → `tool-update.yml` — auto-applies `tool-bot:tool-update`, triggers update planning
 
 ### 5. Add workflow files
 
 Copy the workflow templates from the [`workflows/`](workflows/) directory in this repo into your repo's `.github/workflows/`:
 
-- **`on-tool-request.yml`** → `.github/workflows/gxy-on-tool-request.yml` — triggers on new issues with `tool-request` or `tool-update` label or when `retry-plan` label is added; runs the planner (auto-detects update issues)
-- **`on-ready-to-implement.yml`** → `.github/workflows/gxy-on-ready-to-implement.yml` — triggers when `ready-to-implement` or `retry-generate` label is added; runs the generator and opens a PR
-- **`on-pr-feedback.yml`** → `.github/workflows/gxy-on-pr-feedback.yml` — triggers when `address-feedback` label is added to a PR; reads review comments and CI failures, pushes fixes as new commits
-- **`on-pr-review.yml`** → `.github/workflows/gxy-on-pr-review.yml` — triggers when `review` label is added to a PR; reviews tool files and posts structured findings as a comment
+- **`on-tool-request.yml`** → `.github/workflows/gxy-on-tool-request.yml` — triggers on new issues with `tool-bot:tool-request` or `tool-bot:tool-update` label or when `tool-bot:retry-plan` label is added; runs the planner (auto-detects update issues)
+- **`on-ready-to-implement.yml`** → `.github/workflows/gxy-on-ready-to-implement.yml` — triggers when `tool-bot:ready-to-implement` or `tool-bot:retry-generate` label is added; runs the generator and opens a PR
+- **`on-pr-feedback.yml`** → `.github/workflows/gxy-on-pr-feedback.yml` — triggers when `tool-bot:address-feedback` label is added to a PR; reads review comments and CI failures, pushes fixes as new commits
+- **`on-pr-review.yml`** → `.github/workflows/gxy-on-pr-review.yml` — triggers when `tool-bot:review` label is added to a PR; reviews tool files and posts structured findings as a comment
 - **`autoupdate.yml`** → `.github/workflows/gxy-autoupdate.yml` — runs on a cron schedule (edit the `cron:` line to set the frequency); detects outdated tool versions and opens one PR per tool. Requires `autoupdate.enabled: true` in `.gxy-tool-bot.yml`
 
 > **CI artifact assumption:** The feedback workflow fetches CI failure details from GitHub Actions artifacts. This assumes the CI workflow uploads failure reports as artifacts (e.g. lint reports as `.txt` files, planemo test results as `.json`), following the same conventions as the [tools-iuc](https://github.com/galaxyproject/tools-iuc) repo's `pr.yaml` workflow. If your repo uses a different CI setup that doesn't upload artifacts on failure, the bot will not be able to include CI failure details in its feedback context.
@@ -178,7 +209,7 @@ Make sure Actions are enabled: Settings → Actions → General → "Allow all a
 1. Scans `tools/*/` for the main conda requirement — the `<requirement>` whose version is `@TOOL_VERSION@` (or `token_tool_version="..."`), falling back to the package matching the dir name.
 2. Queries the configured conda channels for the latest version of that package.
 3. For each outdated tool, runs the update agent to apply the bump *and* check upstream for breaking changes and new parameters — the thing a mechanical version bump can't do.
-4. Opens one PR per tool titled `<tool_dir>: update tool wrapper to X.Y.Z`. The `<tool_dir>:` prefix means the `address-feedback` flow works on these PRs automatically.
+4. Opens one PR per tool titled `<tool_dir>: update tool wrapper to X.Y.Z`. The `<tool_dir>:` prefix means the `tool-bot:address-feedback` flow works on these PRs automatically.
 
 Dedup rules (mirroring planemo-autoupdate, branch `tool-bot/autoupdate-<dir>`):
 
@@ -201,7 +232,7 @@ Best practices don't go in the system prompt — they go in a [validation loop](
 
 ### Incremental feedback, not infinite loops
 
-The validation loop only runs a limited number of times before forcing the result back to human hands — a commit is pushed to a PR that a maintainer can review and provide further direction on. The maintainer adds the `address-feedback` label to trigger another loop with CI failures and review comments incorporated. This keeps the bot autonomous for the common case but avoids burning tokens indefinitely on a problem it can't solve alone.
+The validation loop only runs a limited number of times before forcing the result back to human hands — a commit is pushed to a PR that a maintainer can review and provide further direction on. The maintainer adds the `tool-bot:address-feedback` label to trigger another loop with CI failures and review comments incorporated. This keeps the bot autonomous for the common case but avoids burning tokens indefinitely on a problem it can't solve alone.
 
 ### Let planemo CI catch the rest
 
