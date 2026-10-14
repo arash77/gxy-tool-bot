@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
 
-from gxy_tool_bot.api_client import ApiClient, ChatResponse, ToolCall
+from gxy_tool_bot.api_client import ApiClient
 
 
 def _make_client() -> ApiClient:

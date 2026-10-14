@@ -7,7 +7,6 @@ same file-editing agent machinery used here.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 from dataclasses import dataclass
@@ -17,16 +16,15 @@ from gxy_tool_bot.agent_loop import AgentResult
 from gxy_tool_bot.api_client import ApiClient
 from gxy_tool_bot.config import BotConfig
 from gxy_tool_bot.generator import (
-    GeneratedFile,
-    GeneratedTool,
     FileWriter,
+    GeneratedTool,
     _build_tool_definitions,
     _load_template,
 )
-from gxy_tool_bot.validation import ValidationResult, run_agent_with_validation
 from gxy_tool_bot.github_client import Comment, GitHubClient
 from gxy_tool_bot.planemo_utils import summarize_test_json
 from gxy_tool_bot.utils import is_report_artifact, read_tool_files
+from gxy_tool_bot.validation import ValidationResult, run_agent_with_validation
 
 logger = logging.getLogger(__name__)
 

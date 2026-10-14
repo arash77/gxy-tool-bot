@@ -8,7 +8,6 @@ from gxy_tool_bot.planner import (
     _build_lookup_context_text,
     _format_tool_shed,
 )
-from gxy_tool_bot.lookups import BiocondaInfo, GitHubRepoInfo
 
 
 def _make_tool_shed_result() -> ToolShedResult:

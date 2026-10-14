@@ -6,7 +6,6 @@ import logging
 from unittest.mock import MagicMock
 
 from gxy_tool_bot.agent_loop import (
-    AgentResult,
     ToolDefinition,
     _compute_context_size,
     _prune_previous_writes,
@@ -349,7 +348,7 @@ def test_context_summarization_idempotent() -> None:
     handler = MagicMock(return_value=big_result)
     tools = [ToolDefinition(name="fetch", description="fetch", parameters={"type": "object", "properties": {}}, handler=handler)]
 
-    result = run_agent_loop(
+    run_agent_loop(
         client=client,
         system_prompt="sys",
         user_prompt="user",
@@ -564,7 +563,7 @@ def test_summarization_hysteresis(monkeypatch) -> None:
 
     # Set a large initial user prompt so context starts above threshold
     big_prompt = "x" * 600
-    result = run_agent_loop(
+    run_agent_loop(
         client=client,
         system_prompt="sys",
         user_prompt=big_prompt,

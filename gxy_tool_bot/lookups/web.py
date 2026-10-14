@@ -6,7 +6,6 @@ import logging
 import re
 from dataclasses import dataclass
 from html import unescape
-from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup

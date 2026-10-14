@@ -36,15 +36,15 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 import httpx
 
 from gxy_tool_bot.agent_loop import AgentResult, ToolDefinition, run_agent_loop
 from gxy_tool_bot.api_client import ApiClient
 from gxy_tool_bot.config import BotConfig
-from gxy_tool_bot.generator import GeneratedFile, FileWriter
+from gxy_tool_bot.generator import FileWriter, GeneratedFile
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,6 @@ def validate_generated_files(files: list[GeneratedFile]) -> ValidationResult:
     for path, root in xml_contents.items():
         if "macros.xml" in path:
             continue
-        text = root.tag
         # Search for macro imports and token usage
         raw = ET.tostring(root, encoding="unicode")
         # Check <expand> macro references

@@ -7,9 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from gxy_tool_bot.generator import GeneratedFile, FileWriter, _build_tool_definitions, _derive_tool_owner
+from gxy_tool_bot.generator import (
+    FileWriter,
+    GeneratedFile,
+    _build_tool_definitions,
+    _derive_tool_owner,
+)
 from gxy_tool_bot.utils import sanitized_env
-from gxy_tool_bot.validation import ValidationResult, validate_generated_files, _detect_strays
+from gxy_tool_bot.validation import ValidationResult, _detect_strays, validate_generated_files
 
 
 def test_sanitized_env_drops_credential_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -954,8 +959,9 @@ def test_give_up_requires_reason(tmp_path: Path) -> None:
 def test_generate_commit_message_generate_mode() -> None:
     """generate_commit_message returns LLM-generated commit message and PR body."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.return_value = ChatResponse(
@@ -983,8 +989,9 @@ def test_generate_commit_message_generate_mode() -> None:
 def test_generate_commit_message_feedback_mode() -> None:
     """generate_commit_message works in feedback mode."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.return_value = ChatResponse(
@@ -1012,6 +1019,7 @@ def test_generate_commit_message_feedback_mode() -> None:
 def test_generate_commit_message_fallback_on_error() -> None:
     """generate_commit_message falls back to hardcoded strings on LLM failure."""
     from unittest.mock import MagicMock
+
     from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
@@ -1036,8 +1044,9 @@ def test_generate_commit_message_fallback_on_error() -> None:
 def test_generate_commit_message_fallback_on_invalid_json() -> None:
     """generate_commit_message falls back when LLM returns non-JSON."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.return_value = ChatResponse(
@@ -1064,8 +1073,9 @@ def test_generate_commit_message_fallback_on_invalid_json() -> None:
 def test_generate_commit_message_retries_on_invalid_json() -> None:
     """generate_commit_message retries when LLM returns non-JSON, then succeeds."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
@@ -1092,8 +1102,9 @@ def test_generate_commit_message_retries_on_invalid_json() -> None:
 def test_generate_commit_message_retries_on_empty_content() -> None:
     """generate_commit_message retries when LLM returns empty content, then succeeds."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
@@ -1119,8 +1130,9 @@ def test_generate_commit_message_retries_on_empty_content() -> None:
 def test_generate_commit_message_feedback_strips_closes_ref() -> None:
     """Feedback commit messages with #N should trigger LLM retry, then strip as fallback."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
@@ -1148,8 +1160,9 @@ def test_generate_commit_message_feedback_strips_closes_ref() -> None:
 def test_generate_commit_message_feedback_strips_bare_issue_ref() -> None:
     """Feedback commit messages with bare #N (e.g. test IDs) should trigger LLM retry."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.side_effect = [
@@ -1177,8 +1190,9 @@ def test_generate_commit_message_feedback_strips_bare_issue_ref() -> None:
 def test_generate_commit_message_feedback_fallback_strip_on_last_attempt() -> None:
     """If LLM keeps including #N on all attempts, strip as fallback on the last try."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.return_value = ChatResponse(
@@ -1207,8 +1221,9 @@ def test_generate_commit_message_feedback_fallback_strip_on_last_attempt() -> No
 def test_generate_commit_message_generate_keeps_closes_ref() -> None:
     """Generate mode should keep Closes #N (it's the correct issue link)."""
     from unittest.mock import MagicMock
-    from gxy_tool_bot.generator import generate_commit_message
+
     from gxy_tool_bot.api_client import ChatResponse
+    from gxy_tool_bot.generator import generate_commit_message
 
     mock_client = MagicMock()
     mock_client.chat.return_value = ChatResponse(
@@ -1264,7 +1279,7 @@ def test_validation_mv_in_command_ok() -> None:
 
 def test_validation_doi_404_fails() -> None:
     """A DOI that returns 404 should fail validation."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     xml = b"""<?xml version="1.0"?>
 <tool id="test" name="Test" version="@TOOL_VERSION@+galaxy0">
     <command detect_errors="aggressive">test</command>
@@ -1292,7 +1307,7 @@ def test_validation_doi_404_fails() -> None:
 
 def test_validation_doi_resolves_ok() -> None:
     """A DOI that resolves (200) should not cause validation errors."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     xml = b"""<?xml version="1.0"?>
 <tool id="test" name="Test" version="@TOOL_VERSION@+galaxy0">
     <command detect_errors="aggressive">test</command>
@@ -1319,7 +1334,8 @@ def test_validation_doi_resolves_ok() -> None:
 
 def test_validation_doi_network_error_not_failure() -> None:
     """Network errors during DOI checking should NOT cause validation failures."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     import httpx
     xml = b"""<?xml version="1.0"?>
 <tool id="test" name="Test" version="@TOOL_VERSION@+galaxy0">
@@ -1345,7 +1361,7 @@ def test_validation_doi_network_error_not_failure() -> None:
 
 def test_validation_shed_yml_url_404_fails() -> None:
     """A .shed.yml URL that returns 404 should fail validation."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     xml = b"""<?xml version="1.0"?>
 <tool id="test" name="Test" version="@TOOL_VERSION@+galaxy0">
     <command detect_errors="aggressive">test</command>
@@ -1531,7 +1547,7 @@ def test_delete_file_path_traversal(tmp_path: Path) -> None:
 
 def test_planemo_lint(tmp_path: Path) -> None:
     """planemo_lint should run planemo lint and return output."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     fw = FileWriter(tmp_path)
     fw.write_file({"path": "test.xml", "content": "<tool/>"})
 
@@ -1565,8 +1581,8 @@ def test_planemo_lint_missing_path(tmp_path: Path) -> None:
 
 def test_planemo_lint_timeout(tmp_path: Path) -> None:
     """planemo_lint should handle timeout gracefully."""
-    from unittest.mock import patch
     import subprocess
+    from unittest.mock import patch
     fw = FileWriter(tmp_path)
     fw.write_file({"path": "test.xml", "content": "<tool/>"})
 
@@ -1579,8 +1595,8 @@ def test_planemo_lint_timeout(tmp_path: Path) -> None:
 
 def test_planemo_test(tmp_path: Path) -> None:
     """planemo_test should run planemo test and return summarized output."""
-    from unittest.mock import patch, MagicMock
     import json as _json
+    from unittest.mock import MagicMock, patch
     fw = FileWriter(tmp_path)
     fw.write_file({"path": "test.xml", "content": "<tool/>"})
 
@@ -1632,8 +1648,8 @@ def test_planemo_test_missing_path(tmp_path: Path) -> None:
 
 def test_planemo_test_timeout(tmp_path: Path) -> None:
     """planemo_test should handle timeout gracefully."""
-    from unittest.mock import patch
     import subprocess
+    from unittest.mock import patch
     fw = FileWriter(tmp_path)
     fw.write_file({"path": "test.xml", "content": "<tool/>"})
 
@@ -1674,8 +1690,7 @@ def test_planemo_tools_added_when_installed(tmp_path: Path) -> None:
 
 def test_run_in_conda_success(tmp_path: Path) -> None:
     """run_in_conda should install packages and run command, returning output."""
-    from unittest.mock import patch, MagicMock
-    import subprocess
+    from unittest.mock import MagicMock, patch
     fw = FileWriter(tmp_path)
 
     # Simulate env not existing (so creation runs), then command succeeds
@@ -1705,7 +1720,7 @@ def test_run_in_conda_success(tmp_path: Path) -> None:
 
 def test_run_in_conda_env_caching(tmp_path: Path) -> None:
     """run_in_conda should skip env creation when env already exists."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     fw = FileWriter(tmp_path)
 
     # Pre-create the env directory so creation is skipped
@@ -1744,7 +1759,7 @@ def test_run_in_conda_env_caching(tmp_path: Path) -> None:
 
 def test_run_in_conda_env_creation_failure(tmp_path: Path) -> None:
     """run_in_conda should report error when env creation fails."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     fw = FileWriter(tmp_path)
 
     create_result = MagicMock()
@@ -1762,8 +1777,8 @@ def test_run_in_conda_env_creation_failure(tmp_path: Path) -> None:
 
 def test_run_in_conda_timeout(tmp_path: Path) -> None:
     """run_in_conda should handle command timeout gracefully."""
-    from unittest.mock import patch
     import subprocess
+    from unittest.mock import patch
     fw = FileWriter(tmp_path)
 
     # Pre-create env to skip creation
@@ -1847,7 +1862,7 @@ def test_run_in_conda_tool_added_when_installed(tmp_path: Path) -> None:
 
 def test_run_in_conda_does_not_auto_clean_stray_files(tmp_path: Path) -> None:
     """run_in_conda should leave files created by the command — the bot cleans up with delete_file."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     fw = FileWriter(tmp_path)
     fw.write_file({"path": "test-data/sample.txt", "content": "hello"})
 
@@ -1953,7 +1968,7 @@ def test_add_agent_notes_never_removes_existing(tmp_path: Path) -> None:
 
 def test_add_agent_notes_tool_not_added_by_default(tmp_path: Path) -> None:
     """add_agent_notes tool should not be in tools when agent_notes is False (default)."""
-    from gxy_tool_bot.config import BotConfig, ApiConfig, ExemplarConfig
+    from gxy_tool_bot.config import ApiConfig, BotConfig, ExemplarConfig
     config = BotConfig(
         api=ApiConfig(base_url="https://example.com", model="m"),
         exemplars=[ExemplarConfig(url="https://example.com/x.xml")],
@@ -1966,7 +1981,7 @@ def test_add_agent_notes_tool_not_added_by_default(tmp_path: Path) -> None:
 
 def test_add_agent_notes_tool_added_when_enabled(tmp_path: Path) -> None:
     """add_agent_notes tool should be in tools when config.agent_notes is True."""
-    from gxy_tool_bot.config import BotConfig, ApiConfig, ExemplarConfig
+    from gxy_tool_bot.config import ApiConfig, BotConfig, ExemplarConfig
     config = BotConfig(
         api=ApiConfig(base_url="https://example.com", model="m"),
         exemplars=[ExemplarConfig(url="https://example.com/x.xml")],

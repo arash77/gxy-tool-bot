@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -18,7 +17,6 @@ from gxy_tool_bot.eval_harness import (
     run_assertion,
     run_assertions,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

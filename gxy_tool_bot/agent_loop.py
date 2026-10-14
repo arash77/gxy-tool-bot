@@ -163,7 +163,6 @@ def _summarize_old_tool_results(
             call_count += 1
             for idx in batch:
                 msg = messages[idx]
-                old_len = len(msg["content"])
                 msg["content"] = f"[summarized] {summary}"
                 summarized_ids.add(msg["tool_call_id"])
                 count += 1

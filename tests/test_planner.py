@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from gxy_tool_bot.planner import PLAN_MARKER, ToolRequest, count_tool_xmls_in_plan, find_plan_comment, parse_issue_body
+from gxy_tool_bot.planner import (
+    PLAN_MARKER,
+    count_tool_xmls_in_plan,
+    find_plan_comment,
+    parse_issue_body,
+)
 
 
 def test_parse_issue_body_structured() -> None:

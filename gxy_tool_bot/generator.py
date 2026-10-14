@@ -10,11 +10,11 @@ import re
 import shutil
 import subprocess
 import tempfile
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from gxy_tool_bot.agent_loop import AgentResult, ToolDefinition, run_agent_loop
+from gxy_tool_bot.agent_loop import AgentResult, ToolDefinition
 from gxy_tool_bot.api_client import ApiClient
 from gxy_tool_bot.config import BotConfig
 from gxy_tool_bot.exemplars import fetch_exemplars
@@ -25,6 +25,10 @@ from gxy_tool_bot.lookups.toolshed import fetch_toolshed_categories
 from gxy_tool_bot.lookups.web import search_web
 from gxy_tool_bot.planemo_utils import summarize_test_json
 from gxy_tool_bot.utils import sanitized_env
+
+if TYPE_CHECKING:
+    # Circular import: validation.py imports GeneratedFile/FileWriter from here.
+    from gxy_tool_bot.validation import ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -982,8 +986,8 @@ def generate_tool(
         "The plan contains everything you need. Start writing now."
     )
 
-    from gxy_tool_bot.validation import run_agent_with_validation, ValidationResult
     from gxy_tool_bot.planner import count_tool_xmls_in_plan
+    from gxy_tool_bot.validation import run_agent_with_validation
 
     # Scale validation retry rounds by the number of tool XMLs in the plan.
     # Each round gets the full max_tool_iterations budget, so more tool XMLs

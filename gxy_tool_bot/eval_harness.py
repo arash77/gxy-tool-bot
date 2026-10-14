@@ -12,14 +12,13 @@ feedback cases).
 from __future__ import annotations
 
 import fnmatch
-import json
 import logging
 import re
 import shutil
 import subprocess
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -28,11 +27,8 @@ from gxy_tool_bot.address_feedback import FeedbackContext, _build_feedback_user_
 from gxy_tool_bot.api_client import ApiClient
 from gxy_tool_bot.config import BotConfig
 from gxy_tool_bot.generator import (
-    GeneratedFile,
     FileWriter,
     _build_tool_definitions,
-    _build_exemplar_text,
-    _derive_tool_owner,
     _load_template,
     generate_tool,
 )

@@ -122,7 +122,7 @@ class GitHubClient:
                 number=data["number"],
                 title=data["title"],
                 body=data.get("body", ""),
-                labels=[l["name"] for l in data.get("labels", [])],
+                labels=[label["name"] for label in data.get("labels", [])],
                 author=data.get("user", {}).get("login", ""),
             )
         return retry(_do)
