@@ -1,0 +1,38 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write  # mints the OIDC token gh-action-pypi-publish exchanges with PyPI
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify tag matches pyproject version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          TAG_VERSION=${TAG#v}
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag version '$TAG_VERSION' does not match pyproject.toml version '$PKG_VERSION'"
+            exit 1
+          fi
+      - name: Build and check distribution
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Publishes via OIDC trusted publishing — no PYPI_API_TOKEN secret.
+        # Requires a trusted publisher registered on the PyPI project for
+        # this repo + this workflow filename.
