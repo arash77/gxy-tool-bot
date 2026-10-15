@@ -20,7 +20,11 @@ jobs:
         contains(github.event.issue.labels.*.name, 'tool-update'))) ||
       (github.event.action == 'labeled' &&
        (github.event.label.name == 'tool-bot:retry-plan' ||
-        github.event.label.name == 'retry-plan'))
+        github.event.label.name == 'retry-plan' ||
+        github.event.label.name == 'tool-bot:tool-request' ||
+        github.event.label.name == 'tool-request' ||
+        github.event.label.name == 'tool-bot:tool-update' ||
+        github.event.label.name == 'tool-update'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
