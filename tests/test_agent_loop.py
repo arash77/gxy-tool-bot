@@ -834,3 +834,45 @@ def test_agent_loop_keeps_partial_content_on_truncated_last_iteration() -> None:
     )
 
     assert "Partial answer cut o" in result.content
+
+
+def test_agent_loop_caps_oversized_tool_result() -> None:
+    """A single tool result can never exceed _TOOL_RESULT_MAX_CHARS in the
+    conversation — otherwise it would flood the next API request before the
+    old-result summarizer could shrink it."""
+    from gxy_tool_bot.agent_loop import _TOOL_RESULT_MAX_CHARS
+
+    huge = "H" * (_TOOL_RESULT_MAX_CHARS * 3) + "TAIL_ENDS_HERE" * 100
+    tools = [
+        ToolDefinition(
+            name="big_result",
+            description="returns a huge string",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda args: huge,
+        )
+    ]
+    client = MagicMock()
+    client.chat.side_effect = [
+        ChatResponse(
+            content=None,
+            tool_calls=[_make_tool_call("call_1", "big_result", {})],
+            finish_reason="tool_calls",
+        ),
+        ChatResponse(content="done", tool_calls=None, finish_reason="stop"),
+    ]
+
+    result = run_agent_loop(
+        client=client,
+        system_prompt="sys",
+        user_prompt="user",
+        tools=tools,
+        max_iterations=5,
+    )
+
+    tool_msgs = [m for m in result.messages if m.get("role") == "tool"]
+    content = tool_msgs[0]["content"]
+    assert len(content) < len(huge)
+    assert "chars elided" in content
+    # Head preserved, tail preserved.
+    assert content.startswith("H" * 100)
+    assert "TAIL_ENDS_HERE" in content

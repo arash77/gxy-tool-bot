@@ -95,6 +95,32 @@ class AgentResult:
     messages: list[dict] = None  # full conversation history for continuation
 
 
+# Hard cap on any single tool result fed back to the model. Handlers apply
+# their own tighter caps; this is the backstop so an oversized result can
+# never flood the next request — the in-loop summarizer only shrinks *old*
+# results and leaves the most recent ones verbatim.
+_TOOL_RESULT_MAX_CHARS = 50_000
+
+
+def _cap_tool_result(result: str) -> str:
+    """Bound a tool result for the conversation, keeping head and tail.
+
+    The head carries file contents/docs; the tail usually carries exit codes
+    and error messages, so middle-elision preserves more signal than a
+    plain prefix cut.
+    """
+    if len(result) <= _TOOL_RESULT_MAX_CHARS:
+        return result
+    head = _TOOL_RESULT_MAX_CHARS * 7 // 10
+    tail = _TOOL_RESULT_MAX_CHARS - head
+    elided = len(result) - _TOOL_RESULT_MAX_CHARS
+    return (
+        result[:head]
+        + f"\n\n[... {elided} chars elided ...]\n\n"
+        + result[-tail:]
+    )
+
+
 def _compute_context_size(messages: list[dict]) -> int:
     """Estimate total characters across all messages."""
     total = 0
@@ -296,7 +322,7 @@ def run_agent_loop(
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": result,
+                    "content": _cap_tool_result(result),
                 })
 
                 # If this is a write tool, prune previous writes to the same path
