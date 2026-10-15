@@ -4,8 +4,10 @@ XML counting, and update-mode FileWriter/agent notes."""
 from __future__ import annotations
 
 import pytest
+from unittest.mock import MagicMock
 
 from gxy_tool_bot.address_feedback import _build_update_user_prompt, update_tool
+from gxy_tool_bot.api_client import ChatResponse
 from gxy_tool_bot.config import ApiConfig, BotConfig, ExemplarConfig
 from gxy_tool_bot.generator import (
     FileWriter,
@@ -15,7 +17,10 @@ from gxy_tool_bot.generator import (
 from gxy_tool_bot.planner import (
     count_tool_xmls_in_dir,
     generate_update_plan,
+    infer_tool_dir,
     parse_update_issue_body,
+    tool_dir_from_plan,
+    tool_dir_marker,
 )
 
 # ---------------------------------------------------------------------------
@@ -89,6 +94,73 @@ def test_parse_update_legacy_key_value() -> None:
     assert req.tool_dir == "seqtk"
     assert "bump the version" in req.description
     assert req.links == ["https://example.com/notes"]
+
+
+# ---------------------------------------------------------------------------
+# infer_tool_dir / tool_dir marker round-trip
+# ---------------------------------------------------------------------------
+
+TOOL_DIRS = ["samtools_sort", "seqtk", "semibin"]
+
+
+def _client_reply(content: str | None) -> MagicMock:
+    client = MagicMock()
+    client.chat.return_value = ChatResponse(
+        content=content, tool_calls=None, finish_reason="stop",
+    )
+    return client
+
+
+def test_infer_tool_dir_picks_listed_dir() -> None:
+    client = _client_reply("seqtk")
+    result = infer_tool_dir("Please bump seqtk to 1.5", TOOL_DIRS, client)
+    assert result == "seqtk"
+    # The prompt carries the real listing so the model can't guess names.
+    user_msg = client.chat.call_args[0][0][1]["content"]
+    assert "- samtools_sort" in user_msg
+    assert "- semibin" in user_msg
+
+
+def test_infer_tool_dir_rejects_unlisted_answer() -> None:
+    # A hallucinated dir name must not pass through even though it is a
+    # safe-looking path component.
+    client = _client_reply("bcftools_view")
+    assert infer_tool_dir("update bcftools", TOOL_DIRS, client) == ""
+
+
+def test_infer_tool_dir_none_answer() -> None:
+    client = _client_reply("none")
+    assert infer_tool_dir("vague request", TOOL_DIRS, client) == ""
+
+
+def test_infer_tool_dir_rejects_unsafe_answer() -> None:
+    client = _client_reply("../etc/passwd")
+    assert infer_tool_dir("update something", TOOL_DIRS, client) == ""
+
+
+def test_infer_tool_dir_tolerates_wrapped_answer() -> None:
+    client = _client_reply("`seqtk`\nsome trailing explanation")
+    assert infer_tool_dir("update seqtk", TOOL_DIRS, client) == "seqtk"
+
+
+def test_infer_tool_dir_api_failure_returns_empty() -> None:
+    client = MagicMock()
+    client.chat.side_effect = RuntimeError("endpoint down")
+    assert infer_tool_dir("update seqtk", TOOL_DIRS, client) == ""
+
+
+def test_tool_dir_marker_round_trip() -> None:
+    plan = f"{tool_dir_marker('seqtk')}\n# Update Plan: seqtk\n..."
+    assert tool_dir_from_plan(plan) == "seqtk"
+
+
+def test_tool_dir_from_plan_no_marker() -> None:
+    assert tool_dir_from_plan("# Plan\nnothing here") == ""
+
+
+def test_tool_dir_from_plan_rejects_unsafe_marker() -> None:
+    plan = "<!-- gxy-tool-bot-tool-dir:../../etc -->\n# Plan"
+    assert tool_dir_from_plan(plan) == ""
 
 
 def test_parse_update_fallback_whole_body() -> None:

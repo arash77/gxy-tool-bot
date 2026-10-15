@@ -35,8 +35,11 @@ from gxy_tool_bot.planner import (
     find_plan_comment,
     generate_plan,
     generate_update_plan,
+    infer_tool_dir,
     parse_issue_body,
     parse_update_issue_body,
+    tool_dir_from_plan,
+    tool_dir_marker,
 )
 from gxy_tool_bot.validation import ValidationResult
 
@@ -127,17 +130,44 @@ def plan(issue: int, config_path: str) -> None:
             for label in labels_with_legacy(config.labels.tool_update)
         )
 
+        inferred_tool_dir = ""
         try:
             if is_update:
                 update_request = parse_update_issue_body(issue_data.body)
-                src_tool_dir = Path("tools") / update_request.tool_dir
-                if not update_request.tool_dir or not src_tool_dir.is_dir():
+                src_tool_dir = (
+                    Path("tools") / update_request.tool_dir
+                    if update_request.tool_dir else None
+                )
+                if not (src_tool_dir and src_tool_dir.is_dir()):
+                    # Non-template issue: ask the model to pick the dir from
+                    # the real tools/ listing before giving up.
+                    tool_dirs = [
+                        d.name for d in Path("tools").iterdir()
+                        if d.is_dir() and not d.name.startswith(".")
+                    ]
+                    with ApiClient(
+                        config.api.base_url, api_key, config.api.model,
+                        read_timeout=config.api.read_timeout,
+                        fallback_models=config.api.fallback_models,
+                    ) as client:
+                        inferred_tool_dir = infer_tool_dir(
+                            issue_data.body, tool_dirs, client,
+                        )
+                    if inferred_tool_dir:
+                        update_request.tool_dir = inferred_tool_dir
+                        src_tool_dir = Path("tools") / inferred_tool_dir
+                        logger.info(
+                            "Inferred tools/%s from freeform issue text",
+                            inferred_tool_dir,
+                        )
+                if not (src_tool_dir and src_tool_dir.is_dir()):
                     gh.add_comment(
                         issue,
                         f"⚠️ Could not find tool directory `tools/{update_request.tool_dir or '(missing)'}/` "
-                        "in this repo. Check the 'Tool directory' field on the issue, "
-                        "then add the `tool-bot:retry-plan` (or `retry-plan`) "
-                        "label to try again.",
+                        "in this repo, and the tool could not be identified "
+                        "from the issue text. Add a `Tool directory: <name>` "
+                        "line to the issue, then add the `tool-bot:retry-plan` "
+                        "(or `retry-plan`) label to try again.",
                     )
                     gh.add_label(issue, config.labels.generation_failed)
                     sys.exit(1)
@@ -156,7 +186,19 @@ def plan(issue: int, config_path: str) -> None:
             sys.exit(2)
 
         # Post plan as comment with hidden marker
-        comment_body = f"{PLAN_MARKER}\n{plan_md}"
+        comment_body = f"{PLAN_MARKER}\n"
+        if inferred_tool_dir:
+            # Hidden marker lets `generate` recover the inferred dir on
+            # issues that name none; the visible note gives maintainers a
+            # correction path.
+            comment_body += f"{tool_dir_marker(inferred_tool_dir)}\n"
+            comment_body += (
+                "> 📌 No `Tool directory` field found — inferred "
+                f"`tools/{inferred_tool_dir}/`. If that's wrong, add a "
+                "`Tool directory: <name>` line to the issue and re-add the "
+                "`tool-bot:retry-plan` (or `retry-plan`) label.\n\n"
+            )
+        comment_body += plan_md
         if result.tool_call_trace:
             comment_body += f"\n\n{_format_trace_block(result)}"
         gh.add_comment(issue, comment_body)
@@ -217,6 +259,13 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
             update_request = parse_update_issue_body(issue_data.body)
             tool_dir = update_request.tool_dir
             src_tool_dir = Path("tools") / tool_dir if tool_dir else None
+            if not (src_tool_dir and src_tool_dir.is_dir()):
+                # A previous plan may have inferred the dir from freeform
+                # issue text — recover it from the plan comment marker.
+                tool_dir = tool_dir_from_plan(plan_md)
+                src_tool_dir = Path("tools") / tool_dir if tool_dir else None
+                if tool_dir:
+                    update_request.tool_dir = tool_dir
             if not tool_dir or not (src_tool_dir and src_tool_dir.is_dir()):
                 click.echo(
                     f"Error: update issue #{issue} does not resolve to a real "
@@ -225,9 +274,9 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
                 gh.add_comment(
                     issue,
                     f"⚠️ Could not find tool directory `tools/{tool_dir or '(missing)'}/` "
-                    "in this repo. Fix the issue's 'Tool directory' field, "
-                    "then add the `tool-bot:retry-generate` (or `retry-generate`) "
-                    "label to try again.",
+                    "in this repo. Add a `Tool directory: <name>` line to the "
+                    "issue, then add the `tool-bot:retry-generate` (or "
+                    "`retry-generate`) label to try again.",
                 )
                 gh.add_label(issue, config.labels.generation_failed)
                 sys.exit(1)

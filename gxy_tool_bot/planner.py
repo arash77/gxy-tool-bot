@@ -641,6 +641,68 @@ def parse_update_issue_body(body: str) -> UpdateRequest:
     )
 
 
+# Marker embedded in the plan comment when the tool dir was inferred rather
+# than parsed from the issue body — lets `generate` recover it later on
+# issues that don't name a directory.
+_TOOL_DIR_MARKER_TEMPLATE = "<!-- gxy-tool-bot-tool-dir:{name} -->"
+_TOOL_DIR_MARKER_RE = re.compile(r"<!--\s*gxy-tool-bot-tool-dir:([^\s>]+)\s*-->")
+
+
+def tool_dir_marker(tool_dir: str) -> str:
+    """Hidden marker recording an inferred tool dir on the plan comment."""
+    return _TOOL_DIR_MARKER_TEMPLATE.format(name=tool_dir)
+
+
+def tool_dir_from_plan(plan_markdown: str) -> str:
+    """Tool dir recorded on the plan comment via the hidden marker, or ""."""
+    match = _TOOL_DIR_MARKER_RE.search(plan_markdown)
+    return _clean_tool_dir(match.group(1)) if match else ""
+
+
+# Cap on issue text sent to the dir-inference call — enough for a freeform
+# request while keeping the one-shot call cheap.
+_INFER_BODY_CHARS = 8000
+
+
+def infer_tool_dir(body: str, tool_dirs: list[str], client) -> str:
+    """Ask the model which ``tools/`` subdirectory an update request means.
+
+    Fallback for update issues not created via the issue form — arbitrary
+    prose can't be parsed deterministically, so a single cheap LLM call
+    picks from the real directory listing. The reply is validated through
+    ``_clean_tool_dir`` and membership in ``tool_dirs``, so it can never
+    yield an arbitrary path or a nonexistent dir. Returns "" when nothing
+    matches or the call fails.
+    """
+    if not tool_dirs:
+        return ""
+    system = (
+        "You identify which existing tool directory a GitHub issue is "
+        "requesting an update for. Reply with exactly one directory name "
+        "from the list, or 'none' if no directory fits."
+    )
+    listing = "\n".join(f"- {d}" for d in tool_dirs)
+    user = (
+        f"Available tool directories:\n{listing}\n\n"
+        f"Issue text:\n{body[:_INFER_BODY_CHARS]}"
+    )
+    try:
+        resp = client.chat(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.0,
+        )
+    except Exception:
+        logger.warning("Tool dir inference failed", exc_info=True)
+        return ""
+    answer = (resp.content or "").strip().strip("`")
+    answer = answer.splitlines()[0].strip() if answer else ""
+    candidate = _clean_tool_dir(answer)
+    return candidate if candidate in tool_dirs else ""
+
+
 def find_plan_comment(comments: list) -> str | None:
     """Find the plan comment by its hidden marker."""
     for comment in comments:
