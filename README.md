@@ -23,9 +23,9 @@ This repository is under active development. The bot can plan tool wrappers, gen
 
 ## Setup (for consuming repos)
 
-### 1. Install the bot
+### 1. Install the bot (local use only)
 
-The bot can be installed from PyPI or directly from GitHub:
+You only need to install the bot yourself if you want to run it outside the GitHub Actions flows — e.g. calling the `gxy-tool-bot` CLI directly, running the eval harness locally, or developing the bot itself. The workflow templates `pip install` the bot in the runner (step 5), so if you're only setting up the flows you can skip this step.
 
 ```bash
 pip install gxy-tool-bot              # from PyPI
@@ -190,9 +190,11 @@ The `GITHUB_TOKEN` (automatically provided by GitHub Actions) is used for issue 
 
 If the repo is a fork, Issues may be disabled by default. Enable them under Settings → General → Features → check "Issues".
 
-### 8. Enable Actions
+### 8. Enable Actions and allow Actions to open PRs
 
 Make sure Actions are enabled: Settings → Actions → General → "Allow all actions and reusable workflows".
+
+On the same settings page, under "Workflow permissions", select "Read and write permissions" and check **"Allow GitHub Actions to create and approve pull requests"**. The generate, feedback, review, and autoupdate flows open PRs and push commits using the built-in `GITHUB_TOKEN` — without these settings the workflows run fine right up until they try to open the PR, and then fail.
 
 ### 9. Test it
 
