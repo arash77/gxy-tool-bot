@@ -24,10 +24,13 @@ def summarize_test_json(raw: str) -> str:
         if status in ("success", "skip"):
             continue
         entry = {"id": test.get("id", ""), "status": status}
+        # All fields are capped at 2000 chars like problem_log/stdout/stderr
+        # below — planemo embeds full expected-vs-actual diffs in
+        # output_problems, which can be megabytes for large test outputs.
         if test_data.get("output_problems"):
-            entry["output_problems"] = test_data["output_problems"]
+            entry["output_problems"] = [p[:2000] for p in test_data["output_problems"]]
         if test_data.get("execution_problem"):
-            entry["execution_problem"] = test_data["execution_problem"]
+            entry["execution_problem"] = test_data["execution_problem"][:2000]
         if test_data.get("problem_log"):
             entry["problem_log"] = test_data["problem_log"][:2000]
         job = test_data.get("job")

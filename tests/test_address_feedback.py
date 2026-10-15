@@ -232,6 +232,80 @@ def test_summarize_test_json_extracts_failures() -> None:
     assert "test_toolbox.1" not in result
 
 
+def test_summarize_test_json_truncates_output_problems() -> None:
+    """Giant expected-vs-actual diffs in output_problems must be capped —
+    uncapped diffs produced ~2.4M-char prompts that the chat endpoint 400s on."""
+    import json
+    raw = json.dumps({"tests": [
+        {"id": "t1", "data": {
+            "status": "failure",
+            "output_problems": ["diff " + "x" * 100_000],
+            "execution_problem": "err " + "y" * 100_000,
+        }},
+    ], "summary": {}})
+    result = summarize_test_json(raw)
+    assert len(result) < 10_000
+    assert result.count("x") <= 2000
+    assert result.count("y") <= 2000
+
+
+def test_collect_ci_artifacts_caps_file_and_total() -> None:
+    """collect_ci_artifacts bounds each file and the combined size so a huge
+    planemo report cannot overflow the LLM context window."""
+    from unittest.mock import MagicMock
+
+    from gxy_tool_bot.utils import collect_ci_artifacts
+
+    gh = MagicMock()
+    gh.get_pr_artifacts.return_value = [
+        {"name": "All tool test results", "id": 1},
+        {"name": "Tool test output 0", "id": 2},
+        {"name": "Tool linting output", "id": 3},
+    ]
+    gh.download_artifact.side_effect = lambda aid: {
+        1: {
+            "tool_test_output.html": b"<html>report</html>",
+            "tool_test_output.md": b"m" * 200_000,
+            "tool_test_output.json": b'{"tests": [], "summary": {"num_tests": 5}}',
+        },
+        2: {"chunk.json": b"{}"},
+        3: {"lint_report.txt": b"w" * 200_000},
+    }[aid]
+
+    artifacts = collect_ci_artifacts(gh, 1)
+
+    # Per-chunk artifact skipped in favor of the combined one.
+    assert gh.download_artifact.call_count == 2
+    # HTML dropped; md dropped as a rendered duplicate of the JSON;
+    # json summarized; lint text kept but truncated at the per-file cap.
+    assert not any(k.endswith(".html") or k.endswith(".md") for k in artifacts)
+    assert artifacts["All tool test results/tool_test_output.json"] == "All 5 tests passed."
+    assert "truncated" in artifacts["Tool linting output/lint_report.txt"]
+    total = sum(len(v) for v in artifacts.values())
+    assert total < 60_000
+
+
+def test_collect_ci_artifacts_marks_overflow() -> None:
+    """Files past the total cap get an omission marker instead of content."""
+    from unittest.mock import MagicMock
+
+    from gxy_tool_bot.utils import _ARTIFACT_TOTAL_CHAR_CAP, collect_ci_artifacts
+
+    gh = MagicMock()
+    gh.get_pr_artifacts.return_value = [{"name": "Tool linting output", "id": 1}]
+    gh.download_artifact.return_value = {
+        "a.txt": b"x" * _ARTIFACT_TOTAL_CHAR_CAP,
+        "b.txt": b"y" * _ARTIFACT_TOTAL_CHAR_CAP,
+        "z.txt": b"more lint output",
+    }
+
+    artifacts = collect_ci_artifacts(gh, 1)
+
+    assert "truncated" in artifacts["Tool linting output/a.txt"]
+    assert "truncated" in artifacts["Tool linting output/b.txt"]
+    assert "omitted" in artifacts["Tool linting output/z.txt"]
+
+
 def test_summarize_test_json_all_passed() -> None:
     """summarize_test_json should report all tests passed when no failures."""
     raw = (

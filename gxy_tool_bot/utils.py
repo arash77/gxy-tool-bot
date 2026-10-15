@@ -50,6 +50,90 @@ def is_report_artifact(name: str) -> bool:
     return any(kw in name.lower() for kw in _ARTIFACT_NAME_KEYWORDS)
 
 
+# Caps on CI artifact text inlined into agent prompts. Planemo reports embed
+# full expected-vs-actual diffs (in both tool_test_output.json output_problems
+# and tool_test_output.md) and have produced ~2.4M-char prompts that the chat
+# endpoint rejects with HTTP 400. The total cap matches the default context
+# budget (api.max_context_chars = 100_000) — reports must share that budget
+# with the rest of the prompt rather than exhaust it.
+_ARTIFACT_FILE_CHAR_CAP = 50_000
+_ARTIFACT_TOTAL_CHAR_CAP = 100_000
+
+
+def _truncate_text(text: str, cap: int) -> str:
+    if len(text) <= cap:
+        return text
+    return text[:cap] + f"\n[... truncated, {len(text)} chars total ...]"
+
+
+def collect_ci_artifacts(gh, pr_number: int) -> dict[str, str]:
+    """Download CI report artifacts for a PR; return "artifact/file" -> text.
+
+    Shared by the feedback and review flows. Only artifacts matching
+    ``is_report_artifact`` are downloaded; when the combined 'All tool test
+    results' artifact exists, the redundant per-chunk 'Tool test output N'
+    artifacts are skipped. HTML reports are dropped as too verbose, and in
+    test-result artifacts the ``.md`` report is dropped when a ``.json`` is
+    present — planemo-ci-action generates the markdown as a rendered
+    duplicate of the JSON (for $GITHUB_STEP_SUMMARY), so it adds no
+    information. Planemo test JSON is itself reduced to a failure summary.
+    File contents are bounded per file and in total so oversized reports
+    cannot overflow the LLM context window.
+    """
+    # Imported here to keep this module's top-level imports dependency-free.
+    from gxy_tool_bot.planemo_utils import summarize_test_json
+
+    ci_artifacts: dict[str, str] = {}
+    total_chars = 0
+    try:
+        artifacts = gh.get_pr_artifacts(pr_number)
+
+        # If the combined test results artifact exists, skip per-chunk artifacts
+        # since the combined one already contains all test results.
+        has_combined = any(a["name"] == "All tool test results" for a in artifacts)
+
+        for artifact in artifacts:
+            name = artifact["name"]
+            # Only download artifacts that look like CI reports
+            if not is_report_artifact(name):
+                continue
+            # Skip per-chunk test artifacts if combined results are available
+            if has_combined and name.startswith("Tool test output "):
+                continue
+            files = gh.download_artifact(artifact["id"])
+            # planemo-ci-action emits tool_test_output.md/html as rendered
+            # duplicates of tool_test_output.json — skip them when the JSON
+            # is present since they carry no additional information.
+            has_test_json = "test" in name.lower() and any(
+                f.endswith(".json") for f in files
+            )
+            for fname in sorted(files):
+                content = files[fname]
+                # Skip HTML reports — too verbose for LLM context
+                if fname.endswith(".html"):
+                    continue
+                if has_test_json and fname.endswith(".md"):
+                    continue
+                try:
+                    text = content.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = content.decode("utf-8", errors="replace")
+                # Parse planemo test JSON into a compact summary of failures
+                if fname.endswith(".json") and "test" in name.lower():
+                    text = summarize_test_json(text)
+                key = f"{name}/{fname}"
+                remaining = _ARTIFACT_TOTAL_CHAR_CAP - total_chars
+                if remaining <= 0:
+                    ci_artifacts[key] = "[omitted — CI artifact size cap reached]"
+                    continue
+                text = _truncate_text(text, min(_ARTIFACT_FILE_CHAR_CAP, remaining))
+                total_chars += len(text)
+                ci_artifacts[key] = text
+    except Exception:
+        logger.warning("Failed to fetch CI artifacts", exc_info=True)
+    return ci_artifacts
+
+
 def read_tool_files(tool_dir: Path) -> dict[str, str]:
     """Read all files from a tool directory, returning relative path -> content.
 

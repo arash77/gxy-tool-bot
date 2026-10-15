@@ -22,8 +22,7 @@ from gxy_tool_bot.generator import (
     _load_template,
 )
 from gxy_tool_bot.github_client import Comment, GitHubClient
-from gxy_tool_bot.planemo_utils import summarize_test_json
-from gxy_tool_bot.utils import is_report_artifact, read_tool_files
+from gxy_tool_bot.utils import collect_ci_artifacts, read_tool_files
 from gxy_tool_bot.validation import ValidationResult, run_agent_with_validation
 
 logger = logging.getLogger(__name__)
@@ -63,46 +62,10 @@ def _collect_feedback(gh: GitHubClient, pr_number: int, tool_dir: Path) -> Feedb
     # Read existing files from the tool directory
     existing_files = read_tool_files(tool_dir)
 
-    # Fetch CI artifacts (lint reports, test outputs, etc.)
-    #
-    # This assumes the CI workflow uploads failure artifacts in the same style as
-    # the IUC tools-iuc repo (e.g. 'Tool linting output', 'Python linting output',
-    # 'R linting output', 'All tool test results', 'Tool test output N').
-    # Anything not matching is_report_artifact is skipped, so binary bundles
-    # like 'gitignored-test-data' are never downloaded.
-    # If the CI workflow behavior changes or a different repo uses different
-    # artifact naming conventions, this may not pick up CI failure info.
-    ci_artifacts: dict[str, str] = {}
-    try:
-        artifacts = gh.get_pr_artifacts(pr_number)
-
-        # If the combined test results artifact exists, skip per-chunk artifacts
-        # since the combined one already contains all test results.
-        has_combined = any(a["name"] == "All tool test results" for a in artifacts)
-
-        for artifact in artifacts:
-            name = artifact["name"]
-            # Only download artifacts that look like CI reports
-            if not is_report_artifact(name):
-                continue
-            # Skip per-chunk test artifacts if combined results are available
-            if has_combined and name.startswith("Tool test output "):
-                continue
-            files = gh.download_artifact(artifact["id"])
-            for fname, content in files.items():
-                # Skip HTML reports — too verbose for LLM context
-                if fname.endswith(".html"):
-                    continue
-                try:
-                    text = content.decode("utf-8")
-                except UnicodeDecodeError:
-                    text = content.decode("utf-8", errors="replace")
-                # Parse planemo test JSON into a compact summary of failures
-                if fname.endswith(".json") and "test" in name.lower():
-                    text = summarize_test_json(text)
-                ci_artifacts[f"{name}/{fname}"] = text
-    except Exception:
-        logger.warning("Failed to fetch CI artifacts", exc_info=True)
+    # Fetch CI artifacts (lint reports, test outputs, etc.) — see
+    # collect_ci_artifacts for the naming conventions, size caps, and the
+    # 'All tool test results' vs per-chunk dedup rules.
+    ci_artifacts = collect_ci_artifacts(gh, pr_number)
 
     return FeedbackContext(
         pr_comments=pr_comments,
@@ -332,6 +295,15 @@ def _run_edit_agent(
     'Feedback round N', "update" -> 'Update round N'). The fourth return
     value is the number of validation-retry rounds the agent used.
     """
+    # The in-loop context summarizer only shrinks tool results — an oversized
+    # initial prompt goes to the chat endpoint verbatim, so flag it in logs.
+    total_chars = len(system_prompt) + len(user_prompt)
+    if total_chars > config.api.max_context_chars:
+        logger.warning(
+            "Prompt size %d exceeds max_context_chars %d",
+            total_chars, config.api.max_context_chars,
+        )
+
     file_writer = FileWriter(tool_dir, mode=mode, env_scrub_names={config.api.api_key_env})
     _load_existing_files(file_writer, tool_dir, existing_files)
 

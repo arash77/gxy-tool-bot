@@ -40,7 +40,7 @@ from gxy_tool_bot.lookups.biotools import search_bio_tools
 from gxy_tool_bot.lookups.github import search_github
 from gxy_tool_bot.lookups.toolshed import fetch_toolshed_categories
 from gxy_tool_bot.lookups.web import search_web
-from gxy_tool_bot.utils import is_report_artifact, read_tool_files
+from gxy_tool_bot.utils import collect_ci_artifacts, read_tool_files
 from gxy_tool_bot.validation import ValidationResult, run_agent_with_validation
 
 logger = logging.getLogger(__name__)
@@ -119,34 +119,10 @@ def collect_review_context(
     ci_artifacts: dict[str, str] = {}
 
     if gh and pr_number is not None:
-        from gxy_tool_bot.planemo_utils import summarize_test_json
-
         all_checks = gh.get_pr_check_runs(pr_number)
         ci_failures = [c for c in all_checks if c.get("conclusion") not in ("success", None, "")]
 
-        try:
-            artifacts = gh.get_pr_artifacts(pr_number)
-            has_combined = any(a["name"] == "All tool test results" for a in artifacts)
-
-            for artifact in artifacts:
-                name = artifact["name"]
-                if not is_report_artifact(name):
-                    continue
-                if has_combined and name.startswith("Tool test output "):
-                    continue
-                files = gh.download_artifact(artifact["id"])
-                for fname, content in files.items():
-                    if fname.endswith(".html"):
-                        continue
-                    try:
-                        text = content.decode("utf-8")
-                    except UnicodeDecodeError:
-                        text = content.decode("utf-8", errors="replace")
-                    if fname.endswith(".json") and "test" in name.lower():
-                        text = summarize_test_json(text)
-                    ci_artifacts[f"{name}/{fname}"] = text
-        except Exception:
-            logger.warning("Failed to fetch CI artifacts for review", exc_info=True)
+        ci_artifacts = collect_ci_artifacts(gh, pr_number)
 
         # If no plan was passed directly, try to fetch it from the linked issue.
         if plan_markdown is None:
