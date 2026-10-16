@@ -162,7 +162,7 @@ Copy the workflow templates from the [`workflows/`](workflows/) directory in thi
 
 - **`on-tool-request.yml`** → `.github/workflows/gxy-on-tool-request.yml` — triggers on new issues with `tool-bot:tool-request` or `tool-bot:tool-update` label or when `tool-bot:retry-plan` label is added; runs the planner (auto-detects update issues)
 - **`on-ready-to-implement.yml`** → `.github/workflows/gxy-on-ready-to-implement.yml` — triggers when `tool-bot:ready-to-implement` or `tool-bot:retry-generate` label is added; runs the generator and opens a PR
-- **`on-pr-feedback.yml`** → `.github/workflows/gxy-on-pr-feedback.yml` — triggers when `tool-bot:address-feedback` label is added to a PR; reads review comments and CI failures, pushes fixes as new commits
+- **`on-pr-feedback.yml`** → `.github/workflows/gxy-on-pr-feedback.yml` — triggers when `tool-bot:address-feedback` label is added to a PR; reads review comments and CI failures, pushes fixes as new commits. Only works when the PR branch lives in this repository — on fork PRs it posts an explanatory comment and stops, since `GITHUB_TOKEN` can't push to a contributor's fork.
 - **`on-pr-review.yml`** → `.github/workflows/gxy-on-pr-review.yml` — triggers when `tool-bot:review` label is added to a PR; reviews tool files and posts structured findings as a comment
 - **`autoupdate.yml`** → `.github/workflows/gxy-autoupdate.yml` — runs on a cron schedule (edit the `cron:` line to set the frequency); detects outdated tool versions and opens one PR per tool. Requires `autoupdate.enabled: true` in `.gxy-tool-bot.yml`
 
