@@ -22,7 +22,7 @@ from gxy_tool_bot.generator import (
     _build_tool_definitions,
     _load_template,
 )
-from gxy_tool_bot.github_client import Comment, GitHubClient
+from gxy_tool_bot.github_client import Comment, GitHubClient, is_bot
 from gxy_tool_bot.utils import collect_ci_artifacts, read_tool_files
 from gxy_tool_bot.validation import ValidationResult, run_agent_with_validation
 
@@ -31,16 +31,6 @@ logger = logging.getLogger(__name__)
 _WRITE_TOOLS = {"write_file", "compress_file", "download_file", "track_file"}
 
 _HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
-
-_BOT_AUTHORS = ("github-actions", "gxy-tool-bot")
-
-
-def _is_bot(c: Comment) -> bool:
-    # Exact app login: "[bot]" can't appear in a user name, so a lookalike
-    # user (e.g. "github-actions-helper") is not the bot.
-    login = c.author.lower()
-    return login.endswith("[bot]") and login.removesuffix("[bot]") in _BOT_AUTHORS
-
 
 def _drop_comments_without_write_access(
     gh: GitHubClient, comments: list[Comment], permissions: dict[str, bool],
@@ -53,7 +43,7 @@ def _drop_comments_without_write_access(
     """
     kept = []
     for c in comments:
-        if not _is_bot(c) and c.author not in permissions:
+        if not is_bot(c) and c.author not in permissions:
             try:
                 permission = gh.get_collaborator_permission(c.author)
             except Exception:
@@ -61,7 +51,7 @@ def _drop_comments_without_write_access(
                                c.author, exc_info=True)
                 permission = "none"
             permissions[c.author] = permission in ("admin", "write")
-        if _is_bot(c) or permissions[c.author]:
+        if is_bot(c) or permissions[c.author]:
             kept.append(c)
     if skipped := len(comments) - len(kept):
         logger.info("Ignoring %d comment(s) from users without write access", skipped)
@@ -203,8 +193,8 @@ def _build_feedback_user_prompt(ctx: FeedbackContext) -> str:
         # maintainer reading the thread never sees them.
         return _HTML_COMMENT_RE.sub("", body)
 
-    human_comments = [c for c in ctx.pr_comments if not _is_bot(c)]
-    useful_bot_comments = [c for c in ctx.pr_comments if _is_bot(c) and _is_useful_bot_comment(c)]
+    human_comments = [c for c in ctx.pr_comments if not is_bot(c)]
+    useful_bot_comments = [c for c in ctx.pr_comments if is_bot(c) and _is_useful_bot_comment(c)]
 
     if human_comments:
         parts.append("## Maintainer Comments\n")

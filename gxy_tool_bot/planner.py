@@ -12,6 +12,7 @@ from gxy_tool_bot.agent_loop import AgentResult, ToolDefinition, run_agent_loop
 from gxy_tool_bot.api_client import ApiClient
 from gxy_tool_bot.config import BotConfig
 from gxy_tool_bot.exemplars import fetch_exemplars
+from gxy_tool_bot.github_client import is_bot
 from gxy_tool_bot.lookups import (
     BiocondaInfo,
     GitHubRepoInfo,
@@ -704,9 +705,13 @@ def infer_tool_dir(body: str, tool_dirs: list[str], client) -> str:
 
 
 def find_plan_comment(comments: list) -> str | None:
-    """Find the plan comment by its hidden marker."""
+    """Find the bot's plan comment by its hidden marker.
+
+    Anyone can comment on an issue, so a marker in a user's comment is
+    ignored. Maintainers edit the bot's own comment, which keeps its author.
+    """
     for comment in comments:
-        if PLAN_MARKER in comment.body:
+        if is_bot(comment) and PLAN_MARKER in comment.body:
             return comment.body.replace(PLAN_MARKER, "").strip()
     return None
 

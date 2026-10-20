@@ -36,6 +36,17 @@ class Comment:
     line: int | None = None
 
 
+_BOT_AUTHORS = ("github-actions", "gxy-tool-bot")
+
+
+def is_bot(c: Comment) -> bool:
+    """Whether a comment was posted by this bot (as a GitHub App)."""
+    # Exact app login: "[bot]" can't appear in a user name, so a lookalike
+    # user (e.g. "github-actions-helper") is not the bot.
+    login = c.author.lower()
+    return login.endswith("[bot]") and login.removesuffix("[bot]") in _BOT_AUTHORS
+
+
 class GitHubClient:
     """Client for GitHub REST API issue operations."""
 
