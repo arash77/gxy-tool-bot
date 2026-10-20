@@ -191,6 +191,20 @@ class GitHubClient:
         """Fetch all issue-level comments on a PR (not review comments)."""
         return self.get_issue_comments(pr_number)
 
+    def get_collaborator_permission(self, username: str) -> str:
+        """A user's permission on this repo: "admin", "write", "read" or "none".
+
+        Unlike a comment's author_association, this doesn't depend on who is
+        asking (the Actions token sees private org members as NONE).
+        """
+        def _do() -> str:
+            resp = self._client.get(
+                f"https://api.github.com/repos/{self.repo}/collaborators/{username}/permission",
+            )
+            resp.raise_for_status()
+            return resp.json()["permission"]
+        return retry(_do)
+
     def get_pr_review_comments(self, pr_number: int) -> list[Comment]:
         """Fetch review comments (inline code comments) on a PR."""
         def _do() -> list[Comment]:
