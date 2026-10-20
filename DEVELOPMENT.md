@@ -183,7 +183,10 @@ Validation tests are in `tests/test_generator.py` (they test
 
 ## CI Environment
 
-The CI workflows install `planemo` and `micromamba` (for the `run_in_conda` tool).
+The CI workflows install `planemo` and `micromamba` (for the `run_in_conda` tool),
+except `on-pr-review.yml`: review reads PR content next to secrets, so it keeps
+planemo, micromamba and the runner's `/usr/bin/conda` off `PATH` and gets no
+shell tools (PR CI lints and tests instead).
 Micromamba is installed from `https://micro.mamba.pm/api/micromamba/linux-64/latest`
 and added to `PATH`. The `run_in_conda` tool uses it to create cached conda
 environments from bioconda/conda-forge and run commands directly. If neither
@@ -234,7 +237,7 @@ When `integrated_review_mode` is enabled in config, `generate_tool` and `address
 
 ### Review agent tools
 
-The review agent has read-only tools only: `read_file`, `planemo_lint`, `planemo_test`, `run_in_conda`, `search_github`, `search_web`, `search_bio_tools`. No write tools — it analyzes, doesn't fix. The fix is done by the original agent in the integrated fix rounds.
+The review agent has read-only tools only: `read_file`, `planemo_lint`, `planemo_test`, `run_in_conda`, `search_github`, `search_web`, `search_bio_tools`. In the review workflow only `read_file` and the search tools are offered, since planemo and conda are kept off `PATH` there (see CI Environment). No write tools — it analyzes, doesn't fix. The fix is done by the original agent in the integrated fix rounds.
 
 ### Findings format
 
