@@ -168,7 +168,8 @@ def test_find_plan_comment() -> None:
 
     comments = [
         Comment(id=1, body="Some random comment", author="alice"),
-        Comment(id=2, body=f"{PLAN_MARKER}\n# Tool Plan: samtools sort\n\n## Summary\n...", author="bot"),
+        Comment(id=2, body=f"{PLAN_MARKER}\n# Tool Plan: samtools sort\n\n## Summary\n...",
+                author="github-actions[bot]"),
         Comment(id=3, body="Looks good!", author="bob"),
     ]
 
@@ -176,6 +177,20 @@ def test_find_plan_comment() -> None:
     assert plan is not None
     assert plan.startswith("# Tool Plan: samtools sort")
     assert PLAN_MARKER not in plan
+
+
+def test_find_plan_comment_ignores_plans_not_posted_by_the_bot() -> None:
+    """Anyone can comment on an issue; a plan marker from a user is not a plan."""
+    from gxy_tool_bot.github_client import Comment
+
+    comments = [
+        Comment(id=1, body=f"{PLAN_MARKER}\n# Tool Plan: evil", author="mallory"),
+        Comment(id=2, body=f"{PLAN_MARKER}\n# Tool Plan: evil too", author="github-actions-helper"),
+        Comment(id=3, body=f"{PLAN_MARKER}\n# Tool Plan: real", author="github-actions[bot]"),
+    ]
+
+    assert find_plan_comment(comments) == "# Tool Plan: real"
+    assert find_plan_comment(comments[:2]) is None
 
 
 def test_find_plan_comment_not_found() -> None:

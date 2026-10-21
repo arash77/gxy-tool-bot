@@ -8,6 +8,7 @@ same file-editing agent machinery used here.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,13 +22,40 @@ from gxy_tool_bot.generator import (
     _build_tool_definitions,
     _load_template,
 )
-from gxy_tool_bot.github_client import Comment, GitHubClient
+from gxy_tool_bot.github_client import Comment, GitHubClient, is_bot
 from gxy_tool_bot.utils import collect_ci_artifacts, read_tool_files
 from gxy_tool_bot.validation import ValidationResult, run_agent_with_validation
 
 logger = logging.getLogger(__name__)
 
 _WRITE_TOOLS = {"write_file", "compress_file", "download_file", "track_file"}
+
+_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+def _drop_comments_without_write_access(
+    gh: GitHubClient, comments: list[Comment], permissions: dict[str, bool],
+) -> list[Comment]:
+    """Keep bot comments and those by users with admin/write on the repo.
+
+    Anyone can comment on a public PR, but only people with write access may
+    steer an agent that can run commands and push. ``permissions`` caches one
+    lookup per author; a failed lookup counts as no access.
+    """
+    kept = []
+    for c in comments:
+        if not is_bot(c) and c.author not in permissions:
+            try:
+                permission = gh.get_collaborator_permission(c.author)
+            except Exception:
+                logger.warning("Permission lookup failed for %s, ignoring their comments",
+                               c.author, exc_info=True)
+                permission = "none"
+            permissions[c.author] = permission in ("admin", "write")
+        if is_bot(c) or permissions[c.author]:
+            kept.append(c)
+    if skipped := len(comments) - len(kept):
+        logger.info("Ignoring %d comment(s) from users without write access", skipped)
+    return kept
 
 
 @dataclass
@@ -55,6 +83,10 @@ def _collect_feedback(gh: GitHubClient, pr_number: int, tool_dir: Path) -> Feedb
             logger.info("Filtered %d resolved review comments (%d remaining)", before - len(review_comments), len(review_comments))
     except Exception:
         logger.warning("Failed to fetch resolved review threads, including all comments", exc_info=True)
+
+    permissions: dict[str, bool] = {}
+    pr_comments = _drop_comments_without_write_access(gh, pr_comments, permissions)
+    review_comments = _drop_comments_without_write_access(gh, review_comments, permissions)
 
     all_checks = gh.get_pr_check_runs(pr_number)
     failed_checks = [c for c in all_checks if c.get("conclusion") not in ("success", None, "")]
@@ -149,24 +181,25 @@ def _build_feedback_user_prompt(ctx: FeedbackContext) -> str:
     # Bot comments (review findings, previous summaries) are included in
     # their own section so the feedback flow has context from prior rounds
     # without relying solely on .agent-notes.
-    _BOT_AUTHORS = ("github-actions", "gxy-tool-bot")
     # Bot comments worth keeping: review findings, generate/feedback summaries.
     # Status comments (e.g. "🔧 Addressing feedback — view progress") are excluded.
     _BOT_KEEP_MARKERS = ("## Tool Review:", "📦 Tool files generated", "🔧 Addressed feedback")
 
-    def _is_bot(c: Comment) -> bool:
-        return any(a in c.author.lower() for a in _BOT_AUTHORS)
-
     def _is_useful_bot_comment(c: Comment) -> bool:
         return c.body.lstrip().startswith(_BOT_KEEP_MARKERS)
 
-    human_comments = [c for c in ctx.pr_comments if not _is_bot(c)]
-    useful_bot_comments = [c for c in ctx.pr_comments if _is_bot(c) and _is_useful_bot_comment(c)]
+    def _visible(body: str) -> str:
+        # GitHub hides HTML comments (an unclosed one hides the rest), so a
+        # maintainer reading the thread never sees them.
+        return _HTML_COMMENT_RE.sub("", body)
+
+    human_comments = [c for c in ctx.pr_comments if not is_bot(c)]
+    useful_bot_comments = [c for c in ctx.pr_comments if is_bot(c) and _is_useful_bot_comment(c)]
 
     if human_comments:
         parts.append("## Maintainer Comments\n")
         for c in human_comments:
-            parts.append(f"**{c.author}:**\n{c.body}\n")
+            parts.append(f"**{c.author}:**\n{_visible(c.body)}\n")
         parts.append("---\n")
 
     if useful_bot_comments:
@@ -184,7 +217,7 @@ def _build_feedback_user_prompt(ctx: FeedbackContext) -> str:
                 location = f" on `{c.file_path}`"
                 if c.line:
                     location += f" at line {c.line}"
-            parts.append(f"**{c.author}:**{location}\n{c.body}\n")
+            parts.append(f"**{c.author}:**{location}\n{_visible(c.body)}\n")
         parts.append("---\n")
 
     # CI failures — filter to relevant lines only

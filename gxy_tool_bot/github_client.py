@@ -36,6 +36,17 @@ class Comment:
     line: int | None = None
 
 
+_BOT_AUTHORS = ("github-actions", "gxy-tool-bot")
+
+
+def is_bot(c: Comment) -> bool:
+    """Whether a comment was posted by this bot (as a GitHub App)."""
+    # Exact app login: "[bot]" can't appear in a user name, so a lookalike
+    # user (e.g. "github-actions-helper") is not the bot.
+    login = c.author.lower()
+    return login.endswith("[bot]") and login.removesuffix("[bot]") in _BOT_AUTHORS
+
+
 class GitHubClient:
     """Client for GitHub REST API issue operations."""
 
@@ -190,6 +201,20 @@ class GitHubClient:
     def get_pr_comments(self, pr_number: int) -> list[Comment]:
         """Fetch all issue-level comments on a PR (not review comments)."""
         return self.get_issue_comments(pr_number)
+
+    def get_collaborator_permission(self, username: str) -> str:
+        """A user's permission on this repo: "admin", "write", "read" or "none".
+
+        Unlike a comment's author_association, this doesn't depend on who is
+        asking (the Actions token sees private org members as NONE).
+        """
+        def _do() -> str:
+            resp = self._client.get(
+                f"https://api.github.com/repos/{self.repo}/collaborators/{username}/permission",
+            )
+            resp.raise_for_status()
+            return resp.json()["permission"]
+        return retry(_do)
 
     def get_pr_review_comments(self, pr_number: int) -> list[Comment]:
         """Fetch review comments (inline code comments) on a PR."""
