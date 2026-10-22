@@ -10,6 +10,7 @@ import pytest
 from gxy_tool_bot.generator import (
     FileWriter,
     GeneratedFile,
+    _as_exec_user,
     _build_tool_definitions,
     _derive_tool_owner,
 )
@@ -1630,6 +1631,20 @@ def test_planemo_test(tmp_path: Path) -> None:
     assert "test.1" not in result
 
 
+def test_planemo_test_shows_planemo_output_when_it_writes_no_report(tmp_path: Path) -> None:
+    """planemo failing before its report (the temp file stays empty) must show why."""
+    from unittest.mock import MagicMock, patch
+    fw = FileWriter(tmp_path)
+    fw.write_file({"path": "test.xml", "content": "<tool/>"})
+    setup_log = "Collecting a package\n" * 2000
+    failed = MagicMock(stdout=setup_log, stderr="cannot create /x: Permission denied", returncode=1)
+
+    with patch("subprocess.run", return_value=failed):
+        result = fw.planemo_test({"path": "test.xml"})
+
+    assert "Permission denied" in result
+
+
 def test_planemo_test_path_traversal(tmp_path: Path) -> None:
     """planemo_test should reject paths outside output directory."""
     fw = FileWriter(tmp_path)
@@ -2068,3 +2083,40 @@ def test_fold_strays_noop_when_no_strays() -> None:
 
     invalid = ValidationResult(valid=False, errors=["some other error"])
     assert _fold_strays(invalid, []) is invalid
+
+
+def test_as_exec_user_unset_runs_command_unchanged(monkeypatch) -> None:
+    monkeypatch.delenv("GXY_TOOL_BOT_EXEC_USER", raising=False)
+    argv = ["planemo", "lint", "x.xml"]
+    assert _as_exec_user(argv, {"PATH": "/bin"}) == argv
+
+
+def test_as_exec_user_runs_command_as_that_user_with_only_the_given_env(monkeypatch) -> None:
+    """The command runs under another uid with a cleared env: it can't read the bot's."""
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    env = {"PATH": "/opt/env/bin:/bin", "HOME": "/home/runner"}
+    argv = _as_exec_user(["sh", "-c", "echo hi"], env)
+    assert argv[:5] == ["sudo", "-n", "-u", "gxyexec", "env"]
+    assert argv[5] == "-i"
+    assert "PATH=/opt/env/bin:/bin" in argv
+    # Its own HOME, not the bot's.
+    assert "HOME=/home/runner" not in argv
+    assert any(a.startswith("HOME=") and "gxy-exec" in a for a in argv)
+    assert argv[-3:] == ["sh", "-c", "echo hi"]
+
+
+def test_as_exec_user_never_puts_a_secret_on_the_command_line(monkeypatch) -> None:
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    monkeypatch.setenv("GXY_TOOL_BOT_API_KEY", "sk-test-not-real")
+    argv = _as_exec_user(["true"], sanitized_env({"GXY_TOOL_BOT_API_KEY"}))
+    assert not any("sk-test-not-real" in a for a in argv)
+
+
+def test_as_exec_user_drops_paths_into_the_bots_home(monkeypatch) -> None:
+    """The exec user can't reach the bot's HOME; settings pointing there break its tools."""
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    env = {"HOME": "/home/runner", "XDG_CONFIG_HOME": "/home/runner/.config",
+           "PATH": "/usr/bin", "LANG": "C"}
+    argv = _as_exec_user(["true"], env)
+    assert not any(a.startswith("XDG_CONFIG_HOME=") for a in argv)
+    assert "PATH=/usr/bin" in argv and "LANG=C" in argv

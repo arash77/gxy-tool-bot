@@ -33,6 +33,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _as_exec_user(argv: list[str], env: dict[str, str]) -> list[str]:
+    """Wrap a command the model chose to run as ``$GXY_TOOL_BOT_EXEC_USER``.
+
+    When that variable names an unprivileged user (a CI workflow creates one),
+    the command runs under its uid with only ``env``: another uid can't read
+    this process's environment, where the API key is, whatever the scrubbing.
+    Unset, the command runs unchanged. ``env`` must already be scrubbed: its
+    values are on the command line, which every user can read.
+    """
+    user = os.environ.get("GXY_TOOL_BOT_EXEC_USER")
+    if not user:
+        return argv
+    home = os.path.join(tempfile.gettempdir(), "gxy-exec-home")
+    # Settings pointing into this process's HOME (XDG_CONFIG_HOME, ...) lead
+    # tools to a place the exec user can't reach: leave them out.
+    own_home = env.get("HOME", "").rstrip("/")
+    kept = {k: v for k, v in env.items() if not (own_home and v.startswith(own_home + "/"))}
+    child = {**kept, "HOME": home, "USER": user, "LOGNAME": user,
+             "MAMBA_ROOT_PREFIX": os.path.join(home, "mamba")}
+    # umask 000: files it writes in the tool dir stay editable by this process.
+    # A cwd it can't reach by its path (this process's, in the runner's home,
+    # which tools like micromamba return to): start in HOME instead.
+    shell = 'umask 000; mkdir -p "$HOME"; cd "$(pwd -P)" 2>/dev/null || cd "$HOME"; exec "$@"'
+    assignments = [f"{k}={v}" for k, v in child.items()]
+    return ["sudo", "-n", "-u", user, "env", "-i", *assignments, "sh", "-c", shell, "sh", *argv]
+
+
 @dataclass
 class GeneratedFile:
     path: str
@@ -278,10 +305,10 @@ class FileWriter:
             return f"Error: path '{path}' does not exist"
 
         try:
+            env = sanitized_env(self.env_scrub_names)
             result = subprocess.run(
-                ["planemo", "lint", str(target)],
-                capture_output=True, text=True, timeout=120,
-                env=sanitized_env(self.env_scrub_names),
+                _as_exec_user(["planemo", "lint", str(target)], env),
+                capture_output=True, text=True, timeout=120, env=env,
             )
             output = result.stdout + result.stderr
             if len(output) > 10000:
@@ -307,21 +334,31 @@ class FileWriter:
         if not target.exists():
             return f"Error: path '{path}' does not exist"
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            json_path = tmp.name
+        # planemo may run as GXY_TOOL_BOT_EXEC_USER: it creates the report itself
+        # in a dir it can write (Linux refuses it a file this user made in /tmp).
+        report_dir = tempfile.mkdtemp(prefix="gxy-planemo-")
+        os.chmod(report_dir, 0o777)
+        json_path = os.path.join(report_dir, "report.json")
 
         try:
+            env = sanitized_env(self.env_scrub_names)
             result = subprocess.run(
-                ["planemo", "test", "--test_output_json", json_path, str(target)],
-                capture_output=True, text=True, timeout=300,
-                env=sanitized_env(self.env_scrub_names),
+                _as_exec_user(
+                    ["planemo", "test", "--test_output_json", json_path, str(target)], env,
+                ),
+                capture_output=True, text=True, timeout=300, env=env,
             )
             try:
                 with open(json_path) as f:
                     raw = f.read()
+            except OSError:
+                raw = ""
+            if raw.strip():
                 output = summarize_test_json(raw)
-            except (FileNotFoundError, OSError):
-                output = result.stdout + result.stderr
+            else:
+                # planemo failed before writing its report: show why instead,
+                # keeping the end, where the error is (after the setup log).
+                output = (result.stdout + result.stderr)[-10000:]
             if len(output) > 10000:
                 output = output[:10000] + "\n... [truncated]\n"
             logger.info("planemo_test: %s (exit %d)", path, result.returncode)
@@ -333,10 +370,7 @@ class FileWriter:
         except Exception as e:
             return f"Error: {e}"
         finally:
-            try:
-                os.unlink(json_path)
-            except OSError:
-                pass
+            shutil.rmtree(report_dir, ignore_errors=True)
 
     def compress_file(self, args: dict) -> str:
         """Gzip-compress an existing file in the output directory.
@@ -422,9 +456,11 @@ class FileWriter:
                     *packages,
                 ]
             try:
+                # Installing packages runs their scripts: as the exec user too.
+                create_env = sanitized_env(self.env_scrub_names)
                 result = subprocess.run(
-                    create_cmd, capture_output=True, text=True, timeout=300,
-                    env=sanitized_env(self.env_scrub_names),
+                    _as_exec_user(create_cmd, create_env),
+                    capture_output=True, text=True, timeout=300, env=create_env,
                 )
                 if result.returncode != 0:
                     err = (result.stderr + result.stdout)[-2000:]
@@ -444,7 +480,7 @@ class FileWriter:
 
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
+                _as_exec_user(["/bin/sh", "-c", command], env), capture_output=True, text=True,
                 timeout=timeout, cwd=str(self.output_dir), env=env,
             )
             output = result.stdout

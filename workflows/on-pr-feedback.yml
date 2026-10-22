@@ -94,24 +94,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install --no-cache-dir gxy-tool-bot==0.2.1
-      # planemo goes in its own venv, off PATH, only for the format step below.
-      - name: Install planemo off PATH
+      - run: pip install "planemo>=0.75.43"
+      - name: Install micromamba
         run: |
-          python -m venv "$RUNNER_TEMP/planemo"
-          "$RUNNER_TEMP/planemo/bin/pip" install --no-cache-dir "planemo>=0.75.43"
-      # The bot offers its planemo_test / run_in_conda (shell) tools whenever
-      # planemo, micromamba or conda is on PATH, and this job holds the LLM
-      # key — so none of them may be. PR CI already lints and tests.
-      # The runner image symlinks /usr/bin/conda.
-      - name: Keep shell tools off PATH
-        run: |
-          sudo rm -f /usr/bin/conda
-          for t in planemo micromamba conda; do
-            if command -v "$t" >/dev/null; then
-              echo "::error::$t is on PATH, the feedback bot would get shell tools"
-              exit 1
-            fi
-          done
+          curl -Ls "https://micro.mamba.pm/api/micromamba/linux-64/latest" | tar -xvj -C /tmp
+          echo "/tmp/bin" >> $GITHUB_PATH
       - name: Find tool directory
         id: find_tool_dir
         env:
@@ -143,6 +130,27 @@ jobs:
           fi
           echo "tool_dir=$TOOL_DIR" >> $GITHUB_OUTPUT
           echo "Found tool directory: $TOOL_DIR"
+      # planemo_test / run_in_conda run model-chosen commands next to the LLM
+      # key. The bot runs them as this unprivileged user
+      # (GXY_TOOL_BOT_EXEC_USER), which can't read the bot process's
+      # environment. It works on a copy of the tool dir outside the runner's
+      # home, which stays closed to it.
+      - name: Create the exec user
+        env:
+          TOOL_DIR: ${{ steps.find_tool_dir.outputs.tool_dir }}
+        run: |
+          sudo useradd -M -s /usr/sbin/nologin gxyexec
+          # The runner runs cron: without this, a crontab outlives the pkill below.
+          echo gxyexec | sudo tee -a /etc/cron.deny >/dev/null
+          if sudo -u gxyexec sudo -n true 2>/dev/null || sudo -u gxyexec docker ps >/dev/null 2>&1; then
+            echo "::error::gxyexec must have neither sudo nor docker"
+            exit 1
+          fi
+          WORK=$(mktemp -d /tmp/gxy-work.XXXXXX)
+          cp -a "tools/$TOOL_DIR" "$WORK/"
+          chmod -R a+rwX "$WORK"
+          echo "GXY_TOOL_BOT_EXEC_USER=gxyexec" >> "$GITHUB_ENV"
+          echo "WORK_TOOL_DIR=$WORK/$TOOL_DIR" >> "$GITHUB_ENV"
       - name: Address feedback
         id: address
         # Failures are reported by the publish job.
@@ -164,23 +172,42 @@ jobs:
           gxy-tool-bot address-feedback \
             --pr $PR_NUMBER \
             --config .gxy-tool-bot.yml \
-            --tool-dir tools/${{ steps.find_tool_dir.outputs.tool_dir }} \
+            --tool-dir "$WORK_TOOL_DIR" \
             --actor ${{ github.event.sender.login || 'manual' }} \
             --commit-msg-path "$RUNNER_TEMP/result/commit-msg" \
             --comment-dir "$RUNNER_TEMP/result/comments" \
             "${OVERRIDE_ARGS[@]}"
-      - name: Format updated XML with planemo
-        if: steps.address.outcome == 'success'
+      # Before this job touches the files again: nothing of gxyexec's may keep
+      # running, and the tool dir may hold only plain files and dirs (a link
+      # would be followed by the steps below and by the upload). The steps
+      # below use a snapshot in RUNNER_TEMP, which gxyexec can't reach.
+      - name: Stop the exec user and check the tool dir
+        id: isolation
+        if: always() && env.WORK_TOOL_DIR != ''
         run: |
-          "$RUNNER_TEMP/planemo/bin/planemo" format --recursive tools/${{ steps.find_tool_dir.outputs.tool_dir }}/
+          sudo pkill -KILL -u gxyexec || true
+          sudo crontab -r -u gxyexec 2>/dev/null || true
+          sleep 1
+          if pgrep -u gxyexec >/dev/null; then
+            echo "::error::gxyexec still has processes running"
+            exit 1
+          fi
+          cp -a "$WORK_TOOL_DIR" "$RUNNER_TEMP/tool"
+          if [ -n "$(find "$RUNNER_TEMP/tool" ! -type f ! -type d)" ]; then
+            echo "::error::The tool dir holds links or special files:"
+            find "$RUNNER_TEMP/tool" ! -type f ! -type d
+            exit 1
+          fi
+      - name: Format updated XML with planemo
+        if: steps.address.outcome == 'success' && steps.isolation.outcome == 'success'
+        run: |
+          planemo format --recursive "$RUNNER_TEMP/tool/"
       - name: Collect result
         if: always()
-        env:
-          TOOL_DIR: ${{ steps.find_tool_dir.outputs.tool_dir }}
         run: |
           mkdir -p "$RUNNER_TEMP/result"
-          if [ "${{ steps.address.outcome }}" = "success" ]; then
-            cp -a "tools/$TOOL_DIR" "$RUNNER_TEMP/result/tool"
+          if [ "${{ steps.address.outcome }}" = "success" ] && [ "${{ steps.isolation.outcome }}" = "success" ]; then
+            cp -a "$RUNNER_TEMP/tool" "$RUNNER_TEMP/result/tool"
             rm -f "$RUNNER_TEMP/result/tool/.tool-name"
           fi
           # Flag files the CLI writes for the publish job.

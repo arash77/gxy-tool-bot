@@ -184,11 +184,23 @@ Validation tests are in `tests/test_generator.py` (they test
 ## CI Environment
 
 The CI workflows install `planemo` and `micromamba` (for the `run_in_conda` tool),
-except `on-pr-review.yml`, `on-fork-pr-review.yml` and `on-pr-feedback.yml`: they
-run the model next to the LLM key, so they keep planemo, micromamba and the
-runner's `/usr/bin/conda` off `PATH` and the bot offers no shell tools (PR CI
-lints and tests instead). Feedback installs planemo in a separate venv, used
-only by its format step.
+except `on-pr-review.yml` and `on-fork-pr-review.yml`: they keep planemo,
+micromamba and the runner's `/usr/bin/conda` off `PATH`, so the review offers no
+shell tools (PR CI lints and tests instead).
+
+`on-pr-feedback.yml` offers them, but runs them as another user: it creates
+`gxyexec` (no sudo, no docker group) and sets `GXY_TOOL_BOT_EXEC_USER=gxyexec`,
+and the bot wraps each command the model chooses in `sudo -n -u gxyexec env -i ...`
+with only the environment it needs (`_as_exec_user` in `generator.py`). A
+different user can't read the bot's `/proc/<pid>/environ`, so the LLM key stays
+out of reach. Since that user can't enter the runner's home, the bot works on a
+copy of the tool directory in `/tmp`. `gxyexec` is put in `/etc/cron.deny`
+(the runner runs cron, and a crontab would outlive the kill). After the bot
+exits, the workflow kills anything left running as `gxyexec`, snapshots the copy
+into `$RUNNER_TEMP` (out of `gxyexec`'s reach) and refuses it if it holds
+anything but regular files and directories (a symlink would make later steps
+read or upload something else); only then is the snapshot formatted and handed
+to the commit job.
 Micromamba is installed from `https://micro.mamba.pm/api/micromamba/linux-64/latest`
 and added to `PATH`. The `run_in_conda` tool uses it to create cached conda
 environments from bioconda/conda-forge and run commands directly. If neither
