@@ -5,13 +5,19 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import os
+
 import pytest
 
 from gxy_tool_bot.generator import (
     FileWriter,
     GeneratedFile,
+    _as_exec_user,
     _build_tool_definitions,
     _derive_tool_owner,
+    _read_report,
+    _run_model_command,
+    _share_with_exec_user,
 )
 from gxy_tool_bot.utils import sanitized_env
 from gxy_tool_bot.validation import ValidationResult, _detect_strays, validate_generated_files
@@ -1630,6 +1636,20 @@ def test_planemo_test(tmp_path: Path) -> None:
     assert "test.1" not in result
 
 
+def test_planemo_test_shows_planemo_output_when_it_writes_no_report(tmp_path: Path) -> None:
+    """planemo failing before its report (the temp file stays empty) must show why."""
+    from unittest.mock import MagicMock, patch
+    fw = FileWriter(tmp_path)
+    fw.write_file({"path": "test.xml", "content": "<tool/>"})
+    setup_log = "Collecting a package\n" * 2000
+    failed = MagicMock(stdout=setup_log, stderr="cannot create /x: Permission denied", returncode=1)
+
+    with patch("subprocess.run", return_value=failed):
+        result = fw.planemo_test({"path": "test.xml"})
+
+    assert "Permission denied" in result
+
+
 def test_planemo_test_path_traversal(tmp_path: Path) -> None:
     """planemo_test should reject paths outside output directory."""
     fw = FileWriter(tmp_path)
@@ -2011,6 +2031,18 @@ def test_detect_strays_finds_untracked_files(tmp_path: Path) -> None:
     assert "test-data/sample.txt" not in strays
 
 
+def test_detect_strays_reports_symlink_leaving_the_dir(tmp_path: Path) -> None:
+    """A symlink pointing outside the tool dir is a stray, not a crash."""
+    tool_dir = tmp_path / "tool"
+    tool_dir.mkdir()
+    (tmp_path / "outside.txt").write_text("not a tool file")
+    fw = FileWriter(tool_dir)
+    fw.write_file({"path": "tool.xml", "content": "<tool/>"})
+    (tool_dir / "link").symlink_to(tmp_path / "outside.txt")
+
+    assert _detect_strays(fw) == ["link"]
+
+
 def test_detect_strays_excludes_metadata_files(tmp_path: Path) -> None:
     """_detect_strays should exclude .tool-name and .agent-notes."""
     fw = FileWriter(tmp_path)
@@ -2056,3 +2088,126 @@ def test_fold_strays_noop_when_no_strays() -> None:
 
     invalid = ValidationResult(valid=False, errors=["some other error"])
     assert _fold_strays(invalid, []) is invalid
+
+
+def test_as_exec_user_unset_runs_command_unchanged(monkeypatch) -> None:
+    monkeypatch.delenv("GXY_TOOL_BOT_EXEC_USER", raising=False)
+    argv = ["planemo", "lint", "x.xml"]
+    assert _as_exec_user(argv, {"PATH": "/bin"}) == argv
+
+
+def test_as_exec_user_runs_command_as_that_user_with_only_the_given_env(monkeypatch) -> None:
+    """The command runs under another uid with a cleared env: it can't read the bot's."""
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    env = {"PATH": "/opt/env/bin:/bin", "HOME": "/home/runner"}
+    argv = _as_exec_user(["sh", "-c", "echo hi"], env)
+    assert argv[:5] == ["sudo", "-n", "-u", "gxyexec", "env"]
+    assert argv[5] == "-i"
+    assert "PATH=/opt/env/bin:/bin" in argv
+    # Its own HOME, not the bot's.
+    assert "HOME=/home/runner" not in argv
+    assert any(a.startswith("HOME=") and "gxy-exec" in a for a in argv)
+    assert argv[-3:] == ["sh", "-c", "echo hi"]
+
+
+def test_as_exec_user_never_puts_a_secret_on_the_command_line(monkeypatch) -> None:
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    monkeypatch.setenv("GXY_TOOL_BOT_API_KEY", "sk-test-not-real")
+    argv = _as_exec_user(["true"], sanitized_env({"GXY_TOOL_BOT_API_KEY"}))
+    assert not any("sk-test-not-real" in a for a in argv)
+
+
+def test_as_exec_user_drops_paths_into_the_bots_home(monkeypatch) -> None:
+    """The exec user can't reach the bot's HOME; settings pointing there break its tools."""
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    env = {"HOME": "/home/runner", "XDG_CONFIG_HOME": "/home/runner/.config",
+           "PATH": "/usr/bin", "LANG": "C"}
+    argv = _as_exec_user(["true"], env)
+    assert not any(a.startswith("XDG_CONFIG_HOME=") for a in argv)
+    assert "PATH=/usr/bin" in argv and "LANG=C" in argv
+
+
+def test_as_exec_user_keeps_path_entries_outside_the_bots_home(monkeypatch) -> None:
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    env = {"HOME": "/home/runner", "PATH": "/home/runner/.local/bin:/opt/py/bin:/usr/bin"}
+    argv = _as_exec_user(["true"], env)
+    assert "PATH=/opt/py/bin:/usr/bin" in argv
+
+
+def test_run_model_command_stops_the_exec_user_afterwards(monkeypatch) -> None:
+    """Nothing of the exec user's may keep running, also after a timeout."""
+    import subprocess as sp
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise sp.TimeoutExpired(argv, 1)
+        return sp.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    with pytest.raises(sp.TimeoutExpired):
+        _run_model_command(["sleep", "9"], {"PATH": "/bin"}, timeout=1)
+    assert calls[0][:4] == ["sudo", "-n", "-u", "gxyexec"]
+    assert calls[1] == ["sudo", "-n", "-u", "gxyexec", "pkill", "-KILL", "-u", "gxyexec"]
+
+
+def test_run_model_command_unset_runs_command_unchanged(monkeypatch) -> None:
+    import subprocess as sp
+    monkeypatch.delenv("GXY_TOOL_BOT_EXEC_USER", raising=False)
+    calls = []
+    monkeypatch.setattr(sp, "run", lambda argv, **kw: calls.append(argv) or sp.CompletedProcess(argv, 0))
+    _run_model_command(["true"], {"PATH": "/bin"})
+    assert calls == [["true"]]
+
+
+def test_read_report_reads_only_a_regular_file(tmp_path) -> None:
+    """The exec user controls the report's dir: no links (to this process's files), no FIFOs."""
+    report = tmp_path / "report.json"
+    report.write_text('{"tests": []}')
+    assert _read_report(str(report)) == '{"tests": []}'
+    secret = tmp_path / "secret"
+    secret.write_text("KEY=1")
+    link = tmp_path / "link.json"
+    link.symlink_to(secret)
+    assert _read_report(str(link)) == ""
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    assert _read_report(str(fifo)) == ""
+    assert _read_report(str(tmp_path / "missing.json")) == ""
+
+
+def test_share_with_exec_user_unset_changes_nothing(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("GXY_TOOL_BOT_EXEC_USER", raising=False)
+    (tmp_path / "tool.xml").write_text("<tool/>")
+    (tmp_path / "tool.xml").chmod(0o644)
+    _share_with_exec_user(tmp_path)
+    assert (tmp_path / "tool.xml").stat().st_mode & 0o777 == 0o644
+
+
+def test_share_with_exec_user_opens_the_tree_without_following_links(monkeypatch, tmp_path) -> None:
+    """The exec user may plant links in the tool dir: their targets must stay untouched."""
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    tool = tmp_path / "tool"
+    (tool / "test-data").mkdir(parents=True)
+    (tool / "tool.xml").write_text("<tool/>")
+    (tool / "test-data" / "in.txt").write_text("x")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("s")
+    for p in (tool, tool / "test-data", outside):
+        p.chmod(0o755)
+    for p in (tool / "tool.xml", tool / "test-data" / "in.txt", outside / "secret.txt"):
+        p.chmod(0o644)
+    (tool / "link.txt").symlink_to(outside / "secret.txt")
+    (tool / "linkdir").symlink_to(outside)
+
+    _share_with_exec_user(tool)
+
+    assert (tool / "tool.xml").stat().st_mode & 0o777 == 0o666
+    assert (tool / "test-data" / "in.txt").stat().st_mode & 0o777 == 0o666
+    assert (tool / "test-data").stat().st_mode & 0o777 == 0o777
+    assert tool.stat().st_mode & 0o777 == 0o777
+    assert (outside / "secret.txt").stat().st_mode & 0o777 == 0o644
+    assert outside.stat().st_mode & 0o777 == 0o755

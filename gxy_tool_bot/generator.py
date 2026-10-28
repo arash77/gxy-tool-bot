@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -31,6 +33,100 @@ if TYPE_CHECKING:
     from gxy_tool_bot.validation import ValidationResult
 
 logger = logging.getLogger(__name__)
+
+
+def _as_exec_user(argv: list[str], env: dict[str, str]) -> list[str]:
+    """Wrap a command the model chose to run as ``$GXY_TOOL_BOT_EXEC_USER``.
+
+    When that variable names an unprivileged user (a CI workflow creates one),
+    the command runs under its uid with only ``env``: another uid can't read
+    this process's environment, where the API key is, whatever the scrubbing.
+    Unset, the command runs unchanged. ``env`` must already be scrubbed: its
+    values are on the command line, which every user can read.
+    """
+    user = os.environ.get("GXY_TOOL_BOT_EXEC_USER")
+    if not user:
+        return argv
+    home = os.path.join(tempfile.gettempdir(), "gxy-exec-home")
+    # Settings pointing into this process's HOME (XDG_CONFIG_HOME, ...) lead
+    # tools to a place the exec user can't reach: leave them out.
+    own_home = env.get("HOME", "").rstrip("/") + "/"
+    kept = {}
+    for k, v in env.items():
+        # Entry by entry, so PATH-like lists keep everything outside that HOME.
+        entries = [e for e in v.split(os.pathsep) if own_home == "/" or not e.startswith(own_home)]
+        if entries:
+            kept[k] = os.pathsep.join(entries)
+    child = {**kept, "HOME": home, "USER": user, "LOGNAME": user,
+             "MAMBA_ROOT_PREFIX": os.path.join(home, "mamba")}
+    # umask 000: files it writes in the tool dir stay editable by this process.
+    # A cwd it can't reach by its path (this process's, in the runner's home,
+    # which tools like micromamba return to): start in HOME instead.
+    shell = 'umask 000; mkdir -p "$HOME"; cd "$(pwd -P)" 2>/dev/null || cd "$HOME"; exec "$@"'
+    assignments = [f"{k}={v}" for k, v in child.items()]
+    return ["sudo", "-n", "-u", user, "env", "-i", *assignments, "sh", "-c", shell, "sh", *argv]
+
+
+def _run_model_command(
+    argv: list[str], env: dict[str, str], **kwargs,
+) -> subprocess.CompletedProcess:
+    """Run a command the model chose, as ``$GXY_TOOL_BOT_EXEC_USER`` when set.
+
+    Afterwards nothing of that user's may keep running: a leftover process
+    could change the tool dir while this process checks and uses paths in it,
+    and on a timeout subprocess only kills ``sudo``, not the command.
+    """
+    try:
+        return subprocess.run(_as_exec_user(argv, env), env=env, **kwargs)
+    finally:
+        user = os.environ.get("GXY_TOOL_BOT_EXEC_USER")
+        if user:
+            # As that user, so it can only reach that user's processes. (procps
+            # kill 4.0.4 can't parse `kill -KILL -1`; pkill exits 1 if none are left.)
+            subprocess.run(["sudo", "-n", "-u", user, "pkill", "-KILL", "-u", user],
+                           capture_output=True, timeout=30, check=False)
+
+
+def _read_report(path: str) -> str:
+    """Read a report the exec user wrote: only a regular file, never through a link.
+
+    That user controls the report's directory, so a link there could point
+    this process at its own files (``/proc/self/environ``), and a FIFO would block.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        return f.read()
+
+
+def _share_with_exec_user(root: Path) -> None:
+    """Let ``$GXY_TOOL_BOT_EXEC_USER`` write in ``root`` (files this process wrote are 0644).
+
+    That user may be changing ``root`` meanwhile, so nothing here follows a
+    symlink: following one would open some other file of this process's to it.
+    What that user made itself is its own (EPERM here) and already open (umask 000).
+    """
+    if not os.environ.get("GXY_TOOL_BOT_EXEC_USER"):
+        return
+    for _dir, _subdirs, files, dir_fd in os.fwalk(root, follow_symlinks=False):
+        with contextlib.suppress(PermissionError):
+            os.fchmod(dir_fd, 0o777)
+        for name in files:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+            except OSError:  # a symlink (ELOOP), gone, or unreadable
+                continue
+            try:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    os.fchmod(fd, 0o666)
+            except PermissionError:
+                pass
+            finally:
+                os.close(fd)
 
 
 @dataclass
@@ -278,10 +374,11 @@ class FileWriter:
             return f"Error: path '{path}' does not exist"
 
         try:
-            result = subprocess.run(
-                ["planemo", "lint", str(target)],
+            _share_with_exec_user(self.output_dir)
+            env = sanitized_env(self.env_scrub_names)
+            result = _run_model_command(
+                ["planemo", "lint", str(target)], env,
                 capture_output=True, text=True, timeout=120,
-                env=sanitized_env(self.env_scrub_names),
             )
             output = result.stdout + result.stderr
             if len(output) > 10000:
@@ -307,21 +404,26 @@ class FileWriter:
         if not target.exists():
             return f"Error: path '{path}' does not exist"
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            json_path = tmp.name
+        # planemo may run as GXY_TOOL_BOT_EXEC_USER: it creates the report itself
+        # in a dir it can write (Linux refuses it a file this user made in /tmp).
+        report_dir = tempfile.mkdtemp(prefix="gxy-planemo-")
+        os.chmod(report_dir, 0o777)
+        json_path = os.path.join(report_dir, "report.json")
 
         try:
-            result = subprocess.run(
-                ["planemo", "test", "--test_output_json", json_path, str(target)],
+            _share_with_exec_user(self.output_dir)
+            env = sanitized_env(self.env_scrub_names)
+            result = _run_model_command(
+                ["planemo", "test", "--test_output_json", json_path, str(target)], env,
                 capture_output=True, text=True, timeout=300,
-                env=sanitized_env(self.env_scrub_names),
             )
-            try:
-                with open(json_path) as f:
-                    raw = f.read()
+            raw = _read_report(json_path)
+            if raw.strip():
                 output = summarize_test_json(raw)
-            except (FileNotFoundError, OSError):
-                output = result.stdout + result.stderr
+            else:
+                # planemo failed before writing its report: show why instead,
+                # keeping the end, where the error is (after the setup log).
+                output = (result.stdout + result.stderr)[-10000:]
             if len(output) > 10000:
                 output = output[:10000] + "\n... [truncated]\n"
             logger.info("planemo_test: %s (exit %d)", path, result.returncode)
@@ -333,10 +435,7 @@ class FileWriter:
         except Exception as e:
             return f"Error: {e}"
         finally:
-            try:
-                os.unlink(json_path)
-            except OSError:
-                pass
+            shutil.rmtree(report_dir, ignore_errors=True)
 
     def compress_file(self, args: dict) -> str:
         """Gzip-compress an existing file in the output directory.
@@ -422,9 +521,10 @@ class FileWriter:
                     *packages,
                 ]
             try:
-                result = subprocess.run(
-                    create_cmd, capture_output=True, text=True, timeout=300,
-                    env=sanitized_env(self.env_scrub_names),
+                # Installing packages runs their scripts: as the exec user too.
+                create_env = sanitized_env(self.env_scrub_names)
+                result = _run_model_command(
+                    create_cmd, create_env, capture_output=True, text=True, timeout=300,
                 )
                 if result.returncode != 0:
                     err = (result.stderr + result.stdout)[-2000:]
@@ -443,9 +543,10 @@ class FileWriter:
         env["PATH"] = str(env_path / "bin") + os.pathsep + env.get("PATH", "")
 
         try:
-            result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
-                timeout=timeout, cwd=str(self.output_dir), env=env,
+            _share_with_exec_user(self.output_dir)
+            result = _run_model_command(
+                ["/bin/sh", "-c", command], env, capture_output=True, text=True,
+                timeout=timeout, cwd=str(self.output_dir),
             )
             output = result.stdout
             if result.stderr:
