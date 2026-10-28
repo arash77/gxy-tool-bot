@@ -691,10 +691,13 @@ def address_feedback_cmd(pr_number: int, config_path: str, tool_dir: str, actor:
 @click.option("--config", "config_path", type=click.Path(exists=True), default=".gxy-tool-bot.yml")
 @click.option("--tool-dir", "tool_dir", type=click.Path(), required=True, help="Path to the tool directory in the PR branch")
 @click.option("--actor", default=None, help="GitHub user who triggered the action (for maintainer check)")
+@click.option("--skip-maintainer-check", is_flag=True, default=False,
+              help="Skip the allowed_maintainers check — for runs already gated by a GitHub environment approval")
 @click.option("--comment-dir", "comment_dir", type=click.Path(), default=None,
               help="Write comments as numbered files here instead of posting them")
 def review(
-    pr_number: int, config_path: str, tool_dir: str, actor: str | None, comment_dir: str | None,
+    pr_number: int, config_path: str, tool_dir: str, actor: str | None,
+    skip_maintainer_check: bool, comment_dir: str | None,
 ) -> None:
     """Review tool files on a PR and post findings as a comment (or write it to --comment-dir)."""
     from gxy_tool_bot.review import collect_review_context, format_review_comment, run_review
@@ -710,8 +713,10 @@ def review(
         click.echo("Error: GH_TOKEN environment variable not set", err=True)
         sys.exit(1)
 
-    # Check allowed_maintainers if configured
-    if config.allowed_maintainers:
+    # Check allowed_maintainers if configured. The fork-review workflow skips
+    # this: its actor is the PR author (a fork contributor by definition), and
+    # every run is already gated by the fork-review environment approval.
+    if config.allowed_maintainers and not skip_maintainer_check:
         if not actor or actor not in config.allowed_maintainers:
             who = actor or "unknown"
             click.echo(f"Error: user '{who}' is not in allowed_maintainers list", err=True)

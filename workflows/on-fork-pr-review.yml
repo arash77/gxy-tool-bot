@@ -3,12 +3,14 @@
 # Fork PRs get no secrets on `pull_request`, so this runs on
 # `pull_request_target`, in the base repository with its secrets. That is
 # only safe because nothing from the PR is executed: the job checks out the
-# default branch, extracts the PR's tool files with `git archive` as plain
+# default branch, extracts the PR's files into a detached worktree as plain
 # data, and the reviewer has no shell tools. Do NOT add a checkout of the PR
 # or any step that runs its content.
 #
 # Every push to a fork PR starts a run that waits on the `fork-review`
 # environment; a required reviewer approves it for that exact commit.
+# Applying the `review` (or `tool-bot:review`) label to a fork PR triggers
+# a re-review on demand; the environment approval still gates the run.
 #
 # Setup:
 #   - Environment `fork-review` with required reviewers (Settings →
@@ -25,7 +27,7 @@
 #       EOF
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
 
 permissions: {}
 
@@ -35,7 +37,13 @@ permissions: {}
 jobs:
   review:
     name: Review fork PR
-    if: github.event.pull_request.head.repo.full_name != github.repository
+    # Fork PRs only; on a `labeled` event only the review labels count —
+    # an unrelated label shouldn't restart the review.
+    if: |
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      (github.event.action != 'labeled' ||
+       github.event.label.name == 'review' ||
+       github.event.label.name == 'tool-bot:review')
     runs-on: ubuntu-latest
     environment: fork-review
     permissions:
@@ -57,7 +65,9 @@ jobs:
         id: pr_files
         run: |
           TOOL_DIR=$(gh pr diff $PR_NUMBER --name-only | grep -oP '^tools/\K[^/]+' | sort -u | head -1)
-          if [[ ! "$TOOL_DIR" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+          # First character must not be a dot: '.' and '..' pass
+          # [A-Za-z0-9_.-] but resolve outside tools/.
+          if [[ ! "$TOOL_DIR" =~ ^[A-Za-z0-9_-][A-Za-z0-9_.-]*$ ]]; then
             echo "No reviewable tool directory under tools/ in this PR (got '$TOOL_DIR')"
             exit 1
           fi
@@ -66,8 +76,9 @@ jobs:
             echo "Approved commit $HEAD_SHA is not on the PR any more; the new push has its own run."
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/pr"
-          git archive "$HEAD_SHA" "tools/$TOOL_DIR" | tar -x -C "$RUNNER_TEMP/pr"
+          # A worktree, not `git archive`: archive honors `export-ignore`, so a
+          # PR could hide a file from review with its own .gitattributes.
+          git worktree add --detach "$RUNNER_TEMP/pr" "$HEAD_SHA"
           echo "tool_dir=$TOOL_DIR" >> $GITHUB_OUTPUT
           echo "Reviewing tools/$TOOL_DIR at $HEAD_SHA"
       - uses: actions/setup-python@v5
@@ -92,10 +103,14 @@ jobs:
           GITHUB_REF_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TOOL_DIR: ${{ steps.pr_files.outputs.tool_dir }}
         run: |
+          # The actor here is the PR author — a fork contributor by
+          # definition — so the allowed_maintainers check can't apply. The
+          # fork-review environment approval is the maintainer gate instead.
           gxy-tool-bot review \
             --pr $PR_NUMBER \
             --config .gxy-tool-bot.yml \
             --tool-dir "$RUNNER_TEMP/pr/tools/$TOOL_DIR" \
+            --skip-maintainer-check \
             --comment-dir "$RUNNER_TEMP/comments"
       - name: Upload comments
         if: always()
