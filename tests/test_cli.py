@@ -24,6 +24,17 @@ def _env() -> dict[str, str]:
     return {"GXY_TOOL_BOT_API_KEY": "k", "GH_TOKEN": "t"}
 
 
+def _config_with_maintainers(tmp_path: Path) -> Path:
+    cfg = tmp_path / "bot.yml"
+    cfg.write_text(
+        "repo: owner/repo\n"
+        "allowed_maintainers: [alice]\n"
+        "api:\n  base_url: http://llm.invalid/v1\n  model: m\n"
+        "exemplars:\n  - url: https://example.invalid/tool.xml\n"
+    )
+    return cfg
+
+
 def test_review_comment_dir_writes_instead_of_posting(tmp_path) -> None:
     """With --comment-dir the review is written to a file for a separate job to post."""
     tool_dir = tmp_path / "tools" / "demo"
@@ -81,6 +92,42 @@ def test_review_without_comment_dir_still_posts(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     gh.add_comment.assert_called_once_with(1, "## Tool Review: demo")
+
+
+def test_review_skip_maintainer_check_runs_despite_config(tmp_path) -> None:
+    """Environment-gated flows (fork review) skip allowed_maintainers even when configured."""
+    tool_dir = tmp_path / "tools" / "demo"
+    tool_dir.mkdir(parents=True)
+    gh = MagicMock()
+    ctx = MagicMock(existing_files={"demo.xml": "<tool/>"})
+    with patch("gxy_tool_bot.cli.GitHubClient") as client, \
+         patch("gxy_tool_bot.review.collect_review_context", return_value=ctx), \
+         patch("gxy_tool_bot.review.run_review", return_value=MagicMock(findings=[])), \
+         patch("gxy_tool_bot.review.format_review_comment", return_value="## Tool Review: demo"):
+        client.return_value.__enter__.return_value = gh
+        result = CliRunner().invoke(cli, [
+            "review", "--pr", "1", "--config", str(_config_with_maintainers(tmp_path)),
+            "--tool-dir", str(tool_dir), "--actor", "external-contributor",
+            "--skip-maintainer-check",
+        ], env=_env())
+
+    assert result.exit_code == 0, result.output
+    gh.add_comment.assert_called_once_with(1, "## Tool Review: demo")
+
+
+def test_review_without_skip_still_blocks_unlisted_actor(tmp_path) -> None:
+    """The flag is opt-in: without it, allowed_maintainers still blocks."""
+    tool_dir = tmp_path / "tools" / "demo"
+    tool_dir.mkdir(parents=True)
+    gh = MagicMock()
+    with patch("gxy_tool_bot.cli.GitHubClient") as client:
+        client.return_value.__enter__.return_value = gh
+        result = CliRunner().invoke(cli, [
+            "review", "--pr", "1", "--config", str(_config_with_maintainers(tmp_path)),
+            "--tool-dir", str(tool_dir), "--actor", "external-contributor",
+        ], env=_env())
+
+    assert result.exit_code == 1
 
 
 def test_address_feedback_comment_dir_keeps_comment_order(tmp_path) -> None:
