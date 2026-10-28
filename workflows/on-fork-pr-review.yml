@@ -7,16 +7,20 @@
 # data, and the reviewer has no shell tools. Do NOT add a checkout of the PR
 # or any step that runs its content.
 #
-# Every push to a fork PR starts a run that waits on the `fork-review`
-# environment; a required reviewer approves it for that exact commit.
-# Applying the `review` (or `tool-bot:review`) label to a fork PR triggers
-# a re-review on demand; the environment approval still gates the run.
+# A maintainer requests a review by applying the `review` (or
+# `tool-bot:review`) label; nothing runs on PR open or new pushes. Applying
+# a label needs write access, so the requester is always a maintainer — and
+# their login is passed to the bot as --actor for the allowed_maintainers
+# check.
 #
-# Setup:
-#   - Environment `fork-review` with required reviewers (Settings →
-#     Environments). Optionally give it its own GXY_TOOL_BOT_API_KEY, which
-#     takes precedence over the repository secret, so it can be revoked on
-#     its own.
+# Optional extra gate: create a `fork-review` environment with required
+# reviewers (Settings → Environments). Each run then waits for an approval
+# before proceeding, and the approver sees the commit under review. Give it
+# its own GXY_TOOL_BOT_API_KEY to be able to revoke that access on its own.
+# Without the environment, runs proceed as soon as a maintainer labels —
+# still maintainer-gated, just without the explicit confirmation.
+#
+# Deployment note:
 #   - Public repositories block `pull_request_target` by default unless an
 #     Actions event policy allows it (enforced from November 2026). Allow it
 #     for this workflow only:
@@ -27,7 +31,7 @@
 #       EOF
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled]
+    types: [labeled]
 
 permissions: {}
 
@@ -37,12 +41,10 @@ permissions: {}
 jobs:
   review:
     name: Review fork PR
-    # Fork PRs only; on a `labeled` event only the review labels count —
-    # an unrelated label shouldn't restart the review.
+    # Fork PRs only, and only the review labels count.
     if: |
       github.event.pull_request.head.repo.full_name != github.repository &&
-      (github.event.action != 'labeled' ||
-       github.event.label.name == 'review' ||
+      (github.event.label.name == 'review' ||
        github.event.label.name == 'tool-bot:review')
     runs-on: ubuntu-latest
     environment: fork-review
@@ -103,14 +105,13 @@ jobs:
           GITHUB_REF_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TOOL_DIR: ${{ steps.pr_files.outputs.tool_dir }}
         run: |
-          # The actor here is the PR author — a fork contributor by
-          # definition — so the allowed_maintainers check can't apply. The
-          # fork-review environment approval is the maintainer gate instead.
+          # The sender is the maintainer who applied the label — the same
+          # actor semantics as same-repo review.
           gxy-tool-bot review \
             --pr $PR_NUMBER \
             --config .gxy-tool-bot.yml \
             --tool-dir "$RUNNER_TEMP/pr/tools/$TOOL_DIR" \
-            --skip-maintainer-check \
+            --actor ${{ github.event.sender.login }} \
             --comment-dir "$RUNNER_TEMP/comments"
       - name: Upload comments
         if: always()

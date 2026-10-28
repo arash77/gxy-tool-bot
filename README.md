@@ -189,12 +189,13 @@ The `GITHUB_TOKEN` (automatically provided by GitHub Actions) is used for issue 
 
 ### Fork PR reviews
 
-Fork PRs get no secrets on normal PR events, so `on-fork-pr-review.yml` runs on `pull_request_target` and never executes PR content: it extracts the PR's tool files as plain data and reviews them with no shell tools. Each push to a fork PR starts a run that waits until a maintainer approves it, for that exact commit. The PR shows "This branch is waiting for a deployment approval"; approve from the linked run with **Review deployments**. Fork PRs get review only, not feedback.
+Fork PRs get no secrets on normal PR events, so `on-fork-pr-review.yml` runs on `pull_request_target` and never executes PR content: it extracts the PR's tool files as plain data and reviews them with no shell tools. Fork PRs get review only, not feedback.
+
+A maintainer requests a review by applying the `review` (or `tool-bot:review`) label — nothing runs on PR open or new pushes. Applying a label needs write access to the repo, so the requester is always a maintainer, and their login is passed to the bot as `--actor` for the `allowed_maintainers` check. Re-apply the label for a re-review after new pushes.
 
 Setup:
 
-1. **Environment:** Settings → Environments → New environment `fork-review`, with required reviewers (the maintainers who may approve). Optionally add a separate `GXY_TOOL_BOT_API_KEY` secret there; it takes precedence over the repository secret, so it can be revoked on its own.
-2. **Allow `pull_request_target`:** public repositories block this event by default unless an Actions event policy allows it (enforced from November 2026). Allow it for this workflow only (needs repo admin):
+1. **Allow `pull_request_target`:** public repositories block this event by default unless an Actions event policy allows it (enforced from November 2026). Allow it for this workflow only (needs repo admin):
 
    ```bash
    gh api -X POST repos/OWNER/REPO/actions/policies --input - <<'EOF'
@@ -203,6 +204,20 @@ Setup:
     "rules": [{"type": "restrict_action_events", "parameters": {"allowed_events": ["pull_request_target"]}}]}
    EOF
    ```
+
+2. **(Optional) Environment:** Settings → Environments → New environment `fork-review`, with required reviewers. Each labeled run then waits for an approval before proceeding, and the approver sees the exact commit under review.
+
+#### Using a different API key for fork reviews
+
+Fork reviews feed untrusted contributor content to the model with your API key on the line, so you may want a separate key you can meter or revoke independently. The bot reads the key from whichever env var your config's `api_key_env` names — point that name at a different secret for this flow only:
+
+```yaml
+# .github/workflows/gxy-on-fork-pr-review.yml — the "Review tool files" step:
+env:
+  GXY_TOOL_BOT_API_KEY: ${{ secrets.GXY_TOOL_BOT_API_KEY_FORK }}
+```
+
+(If your `api_key_env` is e.g. `GXY_TOOL_BOT_API_KEY_CZ`, set that name instead.) Every other workflow keeps using the repository secret unchanged. Alternatively, if you created the `fork-review` environment above, add the secret *there* — environment secrets take precedence over repository secrets — and the workflow needs no edit at all.
 
 ### 7. Enable Issues
 
