@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -58,6 +60,32 @@ def _as_exec_user(argv: list[str], env: dict[str, str]) -> list[str]:
     shell = 'umask 000; mkdir -p "$HOME"; cd "$(pwd -P)" 2>/dev/null || cd "$HOME"; exec "$@"'
     assignments = [f"{k}={v}" for k, v in child.items()]
     return ["sudo", "-n", "-u", user, "env", "-i", *assignments, "sh", "-c", shell, "sh", *argv]
+
+
+def _share_with_exec_user(root: Path) -> None:
+    """Let ``$GXY_TOOL_BOT_EXEC_USER`` write in ``root`` (files this process wrote are 0644).
+
+    That user may be changing ``root`` meanwhile, so nothing here follows a
+    symlink: following one would open some other file of this process's to it.
+    What that user made itself is its own (EPERM here) and already open (umask 000).
+    """
+    if not os.environ.get("GXY_TOOL_BOT_EXEC_USER"):
+        return
+    for _dir, _subdirs, files, dir_fd in os.fwalk(root, follow_symlinks=False):
+        with contextlib.suppress(PermissionError):
+            os.fchmod(dir_fd, 0o777)
+        for name in files:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+            except OSError:  # a symlink (ELOOP), gone, or unreadable
+                continue
+            try:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    os.fchmod(fd, 0o666)
+            except PermissionError:
+                pass
+            finally:
+                os.close(fd)
 
 
 @dataclass
@@ -305,6 +333,7 @@ class FileWriter:
             return f"Error: path '{path}' does not exist"
 
         try:
+            _share_with_exec_user(self.output_dir)
             env = sanitized_env(self.env_scrub_names)
             result = subprocess.run(
                 _as_exec_user(["planemo", "lint", str(target)], env),
@@ -341,6 +370,7 @@ class FileWriter:
         json_path = os.path.join(report_dir, "report.json")
 
         try:
+            _share_with_exec_user(self.output_dir)
             env = sanitized_env(self.env_scrub_names)
             result = subprocess.run(
                 _as_exec_user(
@@ -479,6 +509,7 @@ class FileWriter:
         env["PATH"] = str(env_path / "bin") + os.pathsep + env.get("PATH", "")
 
         try:
+            _share_with_exec_user(self.output_dir)
             result = subprocess.run(
                 _as_exec_user(["/bin/sh", "-c", command], env), capture_output=True, text=True,
                 timeout=timeout, cwd=str(self.output_dir), env=env,

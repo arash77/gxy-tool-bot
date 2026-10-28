@@ -13,6 +13,7 @@ from gxy_tool_bot.generator import (
     _as_exec_user,
     _build_tool_definitions,
     _derive_tool_owner,
+    _share_with_exec_user,
 )
 from gxy_tool_bot.utils import sanitized_env
 from gxy_tool_bot.validation import ValidationResult, _detect_strays, validate_generated_files
@@ -2120,3 +2121,38 @@ def test_as_exec_user_drops_paths_into_the_bots_home(monkeypatch) -> None:
     argv = _as_exec_user(["true"], env)
     assert not any(a.startswith("XDG_CONFIG_HOME=") for a in argv)
     assert "PATH=/usr/bin" in argv and "LANG=C" in argv
+
+
+def test_share_with_exec_user_unset_changes_nothing(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("GXY_TOOL_BOT_EXEC_USER", raising=False)
+    (tmp_path / "tool.xml").write_text("<tool/>")
+    (tmp_path / "tool.xml").chmod(0o644)
+    _share_with_exec_user(tmp_path)
+    assert (tmp_path / "tool.xml").stat().st_mode & 0o777 == 0o644
+
+
+def test_share_with_exec_user_opens_the_tree_without_following_links(monkeypatch, tmp_path) -> None:
+    """The exec user may plant links in the tool dir: their targets must stay untouched."""
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    tool = tmp_path / "tool"
+    (tool / "test-data").mkdir(parents=True)
+    (tool / "tool.xml").write_text("<tool/>")
+    (tool / "test-data" / "in.txt").write_text("x")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("s")
+    for p in (tool, tool / "test-data", outside):
+        p.chmod(0o755)
+    for p in (tool / "tool.xml", tool / "test-data" / "in.txt", outside / "secret.txt"):
+        p.chmod(0o644)
+    (tool / "link.txt").symlink_to(outside / "secret.txt")
+    (tool / "linkdir").symlink_to(outside)
+
+    _share_with_exec_user(tool)
+
+    assert (tool / "tool.xml").stat().st_mode & 0o777 == 0o666
+    assert (tool / "test-data" / "in.txt").stat().st_mode & 0o777 == 0o666
+    assert (tool / "test-data").stat().st_mode & 0o777 == 0o777
+    assert tool.stat().st_mode & 0o777 == 0o777
+    assert (outside / "secret.txt").stat().st_mode & 0o777 == 0o644
+    assert outside.stat().st_mode & 0o777 == 0o755
