@@ -40,6 +40,11 @@ Create `.gxy-tool-bot.yml` in the repo root:
 api:
   base_url: https://openrouter.ai/api/v1   # or https://api.openai.com/v1
   model: z-ai/glm-5.2                       # or gpt-4o, etc.
+  # api_key_env names the env var the bot reads the key from — the name
+  # is the indirection, so a workflow job can fill it from any secret.
+  # Point it at a different secret in a given workflow to use a different
+  # key for that flow only.
+  api_key_env: GXY_TOOL_BOT_API_KEY
   fallback_models:                          # optional; tried in order if primary fails
     - deepseek-ai/deepseek-r1
     - gpt-4o
@@ -72,6 +77,21 @@ repo: your-org/your-repo
 # otherwise the GitHub repo owner (first part of owner/repo)
 tool_owner: your-tool-shed-owner
 
+# default_branch is optional — used to build the remote_repository_url in
+# generated .shed.yml files. Defaults to GITHUB_REF_DEFAULT_BRANCH (set by
+# the workflows), then 'master'. Set it if your default branch is 'main'
+# and you run the bot outside GitHub Actions.
+default_branch: main
+
+# agent_notes is optional (default false) — when true, the agent keeps an
+# append-only .agent-notes file in the tool dir with rationale for
+# non-obvious decisions; the feedback flow reads and appends to it.
+agent_notes: false
+
+# allowed_maintainers is optional — when set, the maintainer-gated commands
+# (generate, address-feedback, review) refuse to run for anyone else. The
+# workflows pass the labeler/dispatcher as --actor, so this checks *who
+# applied the label*, not who opened the issue or PR.
 allowed_maintainers:
   - your-github-handle
 
@@ -160,21 +180,23 @@ Copy the templates from `examples/` in this repo into your repo's `.github/ISSUE
 
 Copy the workflow templates from the [`workflows/`](workflows/) directory in this repo into your repo's `.github/workflows/`:
 
-- **`on-tool-request.yml`** → `.github/workflows/gxy-on-tool-request.yml` — triggers on new issues with `tool-bot:tool-request` or `tool-bot:tool-update` label or when `tool-bot:retry-plan` label is added; runs the planner (auto-detects update issues)
+- **`on-tool-request.yml`** → `.github/workflows/gxy-on-tool-request.yml` — triggers when `tool-bot:tool-request`, `tool-bot:tool-update` or `tool-bot:retry-plan` label is added (the issue templates apply the request/update label at creation); runs the planner (auto-detects update issues)
 - **`on-ready-to-implement.yml`** → `.github/workflows/gxy-on-ready-to-implement.yml` — triggers when `tool-bot:ready-to-implement` or `tool-bot:retry-generate` label is added; runs the generator and opens a PR. Commands the bot chooses (`planemo_test`, `run_in_conda`, ...) run as a separate user that can't read the LLM key or the job's token (see [DEVELOPMENT.md](DEVELOPMENT.md#ci-environment)).
 - **`on-pr-feedback.yml`** → `.github/workflows/gxy-on-pr-feedback.yml` — triggers when `tool-bot:address-feedback` label is added to a PR; reads review comments and CI failures, pushes fixes as new commits. The bot runs in a job with a read-only token, on a copy of the tool directory; the commands it chooses (`planemo_lint`, `planemo_test`, `run_in_conda`) run as a separate user with no sudo, no docker and no access to the bot's environment, so they can't read the LLM key. A separate job without the LLM key checks its output, commits and pushes. Only works when the PR branch lives in this repository, since `GITHUB_TOKEN` can't push to a contributor's fork.
 - **`on-pr-review.yml`** → `.github/workflows/gxy-on-pr-review.yml` — triggers when `tool-bot:review` label is added to a PR; reviews tool files and posts structured findings as a comment. The review runs with a read-only token and no shell tools; a separate job without the LLM key posts it.
-- **`on-fork-pr-review.yml`** → `.github/workflows/gxy-on-fork-pr-review.yml` — reviews PRs from forks after a maintainer approves the run (see [Fork PR reviews](#fork-pr-reviews)). Optional; needs extra setup.
+- **`on-fork-pr-review.yml`** → `.github/workflows/gxy-on-fork-pr-review.yml` — reviews PRs from forks when a maintainer applies the `review`/`tool-bot:review` label (see [Fork PR reviews](#fork-pr-reviews)). Optional; on public repos it needs a one-time `pull_request_target` event-policy allow, and an optional `fork-review` environment adds an approval gate.
 - **`autoupdate.yml`** → `.github/workflows/gxy-autoupdate.yml` — runs on a cron schedule (edit the `cron:` line to set the frequency); detects outdated tool versions and opens one PR per tool. Requires `autoupdate.enabled: true` in `.gxy-tool-bot.yml`. Commands the bot chooses (`planemo_test`, `run_in_conda`, ...) run as a separate user that can't read the LLM key or the job's token (see [DEVELOPMENT.md](DEVELOPMENT.md#ci-environment)).
 
 > **CI artifact assumption:** The feedback workflow fetches CI failure details from GitHub Actions artifacts. This assumes the CI workflow uploads failure reports as artifacts (e.g. lint reports as `.txt` files, planemo test results as `.json`), following the same conventions as the [tools-iuc](https://github.com/galaxyproject/tools-iuc) repo's `pr.yaml` workflow. If your repo uses a different CI setup that doesn't upload artifacts on failure, the bot will not be able to include CI failure details in its feedback context.
 
 > **Validation flag file:** When generation or feedback addressing completes but validation finds issues, the CLI writes a `.validation-failed` flag file to `GITHUB_WORKSPACE` (a built-in GitHub Actions env var). The workflows check for this file to post a comment on the PR noting that validation issues exist. The file is cleaned up after use and is never committed.
 
-Both workflows install the bot from PyPI (pinned to a specific version):
+> **Manual triggers:** `on-pr-feedback`, `on-ready-to-implement` and `autoupdate` also accept `workflow_dispatch` — run them by hand from the Actions tab when a label event was missed or should be redone. Feedback takes a required `pr_number`, ready-to-implement a required `issue_number`, and autoupdate an optional `tool_dir`/`max_tools` for a scoped run; all three also let you override the iteration and retry budgets.
+
+The workflows install the bot from PyPI (pinned to a specific version):
 
 ```yaml
-- run: pip install gxy-tool-bot==0.2.1
+- run: pip install gxy-tool-bot==0.2.2
 ```
 
 ### 6. Add repo secrets
@@ -183,7 +205,7 @@ Go to Settings → Secrets and variables → Actions → New repository secret:
 
 | Secret | Value | Used by |
 |--------|-------|---------|
-| `GXY_TOOL_BOT_API_KEY` | Your LLM API key (e.g. OpenRouter key) | Plan + generate workflows |
+| `GXY_TOOL_BOT_API_KEY` | Your LLM API key (e.g. OpenRouter key) | Every flow that calls the LLM: plan, generate, review, feedback, autoupdate, fork review |
 
 The `GITHUB_TOKEN` (automatically provided by GitHub Actions) is used for issue comments, labels, and PR creation — no extra secret needed.
 
