@@ -197,7 +197,10 @@ needs (`_as_exec_user` in `generator.py`). A different user can't read the bot's
 Since that user can't enter the runner's home, the bot works in `/tmp`: on a
 copy of the tool directory (feedback) or with `--output` there (generate,
 autoupdate). Before each such command it makes that directory writable for
-`gxyexec`, without following links (`_share_with_exec_user`). `gxyexec` is put
+`gxyexec`, without following links (`_share_with_exec_user`), and after it,
+kills everything `gxyexec` still runs (`_run_model_command`), so nothing changes
+the directory while the bot works in it. The workflows refuse a bot version
+without this (it would run the commands as the job user). `gxyexec` is put
 in `/etc/cron.deny` (the runner runs cron, and a crontab would outlive the
 kill). After the bot exits, the workflow kills anything left running as
 `gxyexec`, snapshots the directory to a place `gxyexec` can't reach (feedback:

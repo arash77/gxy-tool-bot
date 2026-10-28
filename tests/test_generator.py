@@ -5,6 +5,8 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import os
+
 import pytest
 
 from gxy_tool_bot.generator import (
@@ -13,6 +15,8 @@ from gxy_tool_bot.generator import (
     _as_exec_user,
     _build_tool_definitions,
     _derive_tool_owner,
+    _read_report,
+    _run_model_command,
     _share_with_exec_user,
 )
 from gxy_tool_bot.utils import sanitized_env
@@ -2121,6 +2125,57 @@ def test_as_exec_user_drops_paths_into_the_bots_home(monkeypatch) -> None:
     argv = _as_exec_user(["true"], env)
     assert not any(a.startswith("XDG_CONFIG_HOME=") for a in argv)
     assert "PATH=/usr/bin" in argv and "LANG=C" in argv
+
+
+def test_as_exec_user_keeps_path_entries_outside_the_bots_home(monkeypatch) -> None:
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    env = {"HOME": "/home/runner", "PATH": "/home/runner/.local/bin:/opt/py/bin:/usr/bin"}
+    argv = _as_exec_user(["true"], env)
+    assert "PATH=/opt/py/bin:/usr/bin" in argv
+
+
+def test_run_model_command_stops_the_exec_user_afterwards(monkeypatch) -> None:
+    """Nothing of the exec user's may keep running, also after a timeout."""
+    import subprocess as sp
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise sp.TimeoutExpired(argv, 1)
+        return sp.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    with pytest.raises(sp.TimeoutExpired):
+        _run_model_command(["sleep", "9"], {"PATH": "/bin"}, timeout=1)
+    assert calls[0][:4] == ["sudo", "-n", "-u", "gxyexec"]
+    assert calls[1] == ["sudo", "-n", "-u", "gxyexec", "pkill", "-KILL", "-u", "gxyexec"]
+
+
+def test_run_model_command_unset_runs_command_unchanged(monkeypatch) -> None:
+    import subprocess as sp
+    monkeypatch.delenv("GXY_TOOL_BOT_EXEC_USER", raising=False)
+    calls = []
+    monkeypatch.setattr(sp, "run", lambda argv, **kw: calls.append(argv) or sp.CompletedProcess(argv, 0))
+    _run_model_command(["true"], {"PATH": "/bin"})
+    assert calls == [["true"]]
+
+
+def test_read_report_reads_only_a_regular_file(tmp_path) -> None:
+    """The exec user controls the report's dir: no links (to this process's files), no FIFOs."""
+    report = tmp_path / "report.json"
+    report.write_text('{"tests": []}')
+    assert _read_report(str(report)) == '{"tests": []}'
+    secret = tmp_path / "secret"
+    secret.write_text("KEY=1")
+    link = tmp_path / "link.json"
+    link.symlink_to(secret)
+    assert _read_report(str(link)) == ""
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    assert _read_report(str(fifo)) == ""
+    assert _read_report(str(tmp_path / "missing.json")) == ""
 
 
 def test_share_with_exec_user_unset_changes_nothing(monkeypatch, tmp_path) -> None:

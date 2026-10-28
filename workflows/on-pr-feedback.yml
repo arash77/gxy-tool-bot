@@ -77,7 +77,8 @@ jobs:
       checks: read
     outputs:
       tool_dir: ${{ steps.find_tool_dir.outputs.tool_dir }}
-      outcome: ${{ steps.address.outcome }}
+      # A failed exec-user check fails the fix, so publish reports that.
+      outcome: ${{ steps.isolation.outcome == 'success' && steps.address.outcome || 'failure' }}
     steps:
       # refs/pull/<N>/head lives on the base repo, and also resolves for
       # workflow_dispatch runs, where pull_request is null.
@@ -139,6 +140,10 @@ jobs:
         env:
           TOOL_DIR: ${{ steps.find_tool_dir.outputs.tool_dir }}
         run: |
+          # An older gxy-tool-bot ignores GXY_TOOL_BOT_EXEC_USER and would run the
+          # model's commands as this user, next to the key: refuse it.
+          python -c "from gxy_tool_bot.generator import _run_model_command" || {
+            echo "::error::This gxy-tool-bot can't run commands as another user; update it"; exit 1; }
           sudo useradd -M -s /usr/sbin/nologin gxyexec
           # The runner runs cron: without this, a crontab outlives the pkill below.
           echo gxyexec | sudo tee -a /etc/cron.deny >/dev/null
@@ -148,7 +153,9 @@ jobs:
           fi
           WORK=$(mktemp -d /tmp/gxy-work.XXXXXX)
           cp -a "tools/$TOOL_DIR" "$WORK/"
-          chmod -R a+rwX "$WORK"
+          # Not writable for gxyexec: it could swap the tool dir for a link. The bot
+          # opens the tool dir itself to it.
+          chmod 755 "$WORK"
           echo "GXY_TOOL_BOT_EXEC_USER=gxyexec" >> "$GITHUB_ENV"
           echo "WORK_TOOL_DIR=$WORK/$TOOL_DIR" >> "$GITHUB_ENV"
       - name: Address feedback

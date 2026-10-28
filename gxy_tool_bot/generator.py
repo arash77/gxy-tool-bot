@@ -50,8 +50,13 @@ def _as_exec_user(argv: list[str], env: dict[str, str]) -> list[str]:
     home = os.path.join(tempfile.gettempdir(), "gxy-exec-home")
     # Settings pointing into this process's HOME (XDG_CONFIG_HOME, ...) lead
     # tools to a place the exec user can't reach: leave them out.
-    own_home = env.get("HOME", "").rstrip("/")
-    kept = {k: v for k, v in env.items() if not (own_home and v.startswith(own_home + "/"))}
+    own_home = env.get("HOME", "").rstrip("/") + "/"
+    kept = {}
+    for k, v in env.items():
+        # Entry by entry, so PATH-like lists keep everything outside that HOME.
+        entries = [e for e in v.split(os.pathsep) if own_home == "/" or not e.startswith(own_home)]
+        if entries:
+            kept[k] = os.pathsep.join(entries)
     child = {**kept, "HOME": home, "USER": user, "LOGNAME": user,
              "MAMBA_ROOT_PREFIX": os.path.join(home, "mamba")}
     # umask 000: files it writes in the tool dir stay editable by this process.
@@ -60,6 +65,42 @@ def _as_exec_user(argv: list[str], env: dict[str, str]) -> list[str]:
     shell = 'umask 000; mkdir -p "$HOME"; cd "$(pwd -P)" 2>/dev/null || cd "$HOME"; exec "$@"'
     assignments = [f"{k}={v}" for k, v in child.items()]
     return ["sudo", "-n", "-u", user, "env", "-i", *assignments, "sh", "-c", shell, "sh", *argv]
+
+
+def _run_model_command(
+    argv: list[str], env: dict[str, str], **kwargs,
+) -> subprocess.CompletedProcess:
+    """Run a command the model chose, as ``$GXY_TOOL_BOT_EXEC_USER`` when set.
+
+    Afterwards nothing of that user's may keep running: a leftover process
+    could change the tool dir while this process checks and uses paths in it,
+    and on a timeout subprocess only kills ``sudo``, not the command.
+    """
+    try:
+        return subprocess.run(_as_exec_user(argv, env), env=env, **kwargs)
+    finally:
+        user = os.environ.get("GXY_TOOL_BOT_EXEC_USER")
+        if user:
+            # As that user, so it can only reach that user's processes. (procps
+            # kill 4.0.4 can't parse `kill -KILL -1`; pkill exits 1 if none are left.)
+            subprocess.run(["sudo", "-n", "-u", user, "pkill", "-KILL", "-u", user],
+                           capture_output=True, timeout=30, check=False)
+
+
+def _read_report(path: str) -> str:
+    """Read a report the exec user wrote: only a regular file, never through a link.
+
+    That user controls the report's directory, so a link there could point
+    this process at its own files (``/proc/self/environ``), and a FIFO would block.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        return f.read()
 
 
 def _share_with_exec_user(root: Path) -> None:
@@ -335,9 +376,9 @@ class FileWriter:
         try:
             _share_with_exec_user(self.output_dir)
             env = sanitized_env(self.env_scrub_names)
-            result = subprocess.run(
-                _as_exec_user(["planemo", "lint", str(target)], env),
-                capture_output=True, text=True, timeout=120, env=env,
+            result = _run_model_command(
+                ["planemo", "lint", str(target)], env,
+                capture_output=True, text=True, timeout=120,
             )
             output = result.stdout + result.stderr
             if len(output) > 10000:
@@ -372,17 +413,11 @@ class FileWriter:
         try:
             _share_with_exec_user(self.output_dir)
             env = sanitized_env(self.env_scrub_names)
-            result = subprocess.run(
-                _as_exec_user(
-                    ["planemo", "test", "--test_output_json", json_path, str(target)], env,
-                ),
-                capture_output=True, text=True, timeout=300, env=env,
+            result = _run_model_command(
+                ["planemo", "test", "--test_output_json", json_path, str(target)], env,
+                capture_output=True, text=True, timeout=300,
             )
-            try:
-                with open(json_path) as f:
-                    raw = f.read()
-            except OSError:
-                raw = ""
+            raw = _read_report(json_path)
             if raw.strip():
                 output = summarize_test_json(raw)
             else:
@@ -488,9 +523,8 @@ class FileWriter:
             try:
                 # Installing packages runs their scripts: as the exec user too.
                 create_env = sanitized_env(self.env_scrub_names)
-                result = subprocess.run(
-                    _as_exec_user(create_cmd, create_env),
-                    capture_output=True, text=True, timeout=300, env=create_env,
+                result = _run_model_command(
+                    create_cmd, create_env, capture_output=True, text=True, timeout=300,
                 )
                 if result.returncode != 0:
                     err = (result.stderr + result.stdout)[-2000:]
@@ -510,9 +544,9 @@ class FileWriter:
 
         try:
             _share_with_exec_user(self.output_dir)
-            result = subprocess.run(
-                _as_exec_user(["/bin/sh", "-c", command], env), capture_output=True, text=True,
-                timeout=timeout, cwd=str(self.output_dir), env=env,
+            result = _run_model_command(
+                ["/bin/sh", "-c", command], env, capture_output=True, text=True,
+                timeout=timeout, cwd=str(self.output_dir),
             )
             output = result.stdout
             if result.stderr:
