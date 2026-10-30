@@ -2211,3 +2211,11 @@ def test_share_with_exec_user_opens_the_tree_without_following_links(monkeypatch
     assert tool.stat().st_mode & 0o777 == 0o777
     assert (outside / "secret.txt").stat().st_mode & 0o777 == 0o644
     assert outside.stat().st_mode & 0o777 == 0o755
+
+
+def test_share_with_exec_user_keeps_executable_bits(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("GXY_TOOL_BOT_EXEC_USER", "gxyexec")
+    (tmp_path / "run.sh").write_text("#!/bin/sh\n")
+    (tmp_path / "run.sh").chmod(0o755)
+    _share_with_exec_user(tmp_path)
+    assert (tmp_path / "run.sh").stat().st_mode & 0o777 == 0o777

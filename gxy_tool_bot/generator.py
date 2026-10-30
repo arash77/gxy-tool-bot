@@ -104,7 +104,7 @@ def _read_report(path: str) -> str:
 
 
 def _share_with_exec_user(root: Path) -> None:
-    """Let ``$GXY_TOOL_BOT_EXEC_USER`` write in ``root`` (files this process wrote are 0644).
+    """Let ``$GXY_TOOL_BOT_EXEC_USER`` write in ``root`` (files this process wrote are 0644 or 0755).
 
     That user may be changing ``root`` meanwhile, so nothing here follows a
     symlink: following one would open some other file of this process's to it.
@@ -121,8 +121,10 @@ def _share_with_exec_user(root: Path) -> None:
             except OSError:  # a symlink (ELOOP), gone, or unreadable
                 continue
             try:
-                if stat.S_ISREG(os.fstat(fd).st_mode):
-                    os.fchmod(fd, 0o666)
+                mode = os.fstat(fd).st_mode
+                if stat.S_ISREG(mode):
+                    # Keep the executable bits: tool scripts must stay runnable and committed as such.
+                    os.fchmod(fd, stat.S_IMODE(mode) | 0o666)
             except PermissionError:
                 pass
             finally:
