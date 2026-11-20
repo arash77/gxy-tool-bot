@@ -876,3 +876,30 @@ def test_agent_loop_caps_oversized_tool_result() -> None:
     # Head preserved, tail preserved.
     assert content.startswith("H" * 100)
     assert "TAIL_ENDS_HERE" in content
+
+
+def test_agent_loop_sends_raw_tool_calls_back() -> None:
+    """The assistant message keeps the call exactly as returned (Gemini thought signatures)."""
+    raw = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "search_bioconda", "arguments": '{"query": "samtools"}'},
+        "extra_content": {"google": {"thought_signature": "sig=="}},
+    }
+    client = MagicMock()
+    client.chat.side_effect = [
+        ChatResponse(
+            content=None,
+            tool_calls=[ToolCall(id="call_1", name="search_bioconda", arguments={"query": "samtools"}, raw=raw)],
+            finish_reason="tool_calls",
+        ),
+        ChatResponse(content="done", tool_calls=None, finish_reason="stop"),
+    ]
+    tools = [ToolDefinition(name="search_bioconda", description="", parameters={"type": "object", "properties": {}},
+                            handler=MagicMock(return_value="{}"))]
+
+    run_agent_loop(client=client, system_prompt="sys", user_prompt="user", tools=tools, max_iterations=5)
+
+    sent = client.chat.call_args_list[1].kwargs["messages"]
+    assistant = next(m for m in sent if m.get("role") == "assistant" and m.get("tool_calls"))
+    assert assistant["tool_calls"] == [raw]

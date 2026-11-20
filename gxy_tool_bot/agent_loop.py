@@ -288,7 +288,7 @@ def run_agent_loop(
             # Append the assistant message with tool_calls to history
             assistant_msg: dict = {"role": "assistant", "content": response.content or ""}
             assistant_msg["tool_calls"] = [
-                {
+                tc.raw or {
                     "id": tc.id,
                     "type": "function",
                     "function": {
