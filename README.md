@@ -192,7 +192,7 @@ Copy the workflow templates from the [`workflows/`](workflows/) directory in thi
 The workflows install the bot from PyPI (pinned to a specific version):
 
 ```yaml
-- run: pip install gxy-tool-bot==0.2.3
+- run: pip install gxy-tool-bot==0.2.4
 ```
 
 ### 6. Add repo secrets
