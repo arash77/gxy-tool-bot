@@ -26,6 +26,9 @@ class ToolCall:
     id: str
     name: str
     arguments: dict
+    # The tool call as the API returned it. The agent loop sends it back
+    # unchanged: Gemini 3+ needs its extra_content (thought signature) back.
+    raw: dict | None = None
 
 
 @dataclass
@@ -132,7 +135,7 @@ class ApiClient:
                     args = json.loads(fn["arguments"])
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                tool_calls.append(ToolCall(id=tc["id"], name=fn["name"], arguments=args))
+                tool_calls.append(ToolCall(id=tc["id"], name=fn["name"], arguments=args, raw=tc))
 
         return ChatResponse(content=content, tool_calls=tool_calls, finish_reason=finish_reason)
 

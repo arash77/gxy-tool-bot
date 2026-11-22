@@ -351,3 +351,21 @@ def test_chat_retries_on_connect_timeout() -> None:
             result = client.chat([{"role": "user", "content": "hi"}])
     assert result.content == "recovered"
     client.close()
+
+
+def test_chat_keeps_raw_tool_call_for_thought_signatures() -> None:
+    # Gemini 3+ returns a thought signature on the call and rejects the next
+    # request (400) if it isn't sent back.
+    client = _make_client()
+    raw = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+        "extra_content": {"google": {"thought_signature": "sig=="}},
+    }
+    resp = _mock_response({"choices": [{"message": {"tool_calls": [raw]}, "finish_reason": "tool_calls"}]})
+    with patch.object(client._client, "post", return_value=resp):
+        result = client.chat([{"role": "user", "content": "read"}])
+    assert result.tool_calls[0].raw == raw
+    client.close()
+
