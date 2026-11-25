@@ -118,7 +118,8 @@ jobs:
           # The tool folder the PR's changed files are in (nested ones too, e.g.
           # tools/image_processing/imagej2); the title's "name:" prefix picks
           # one when the PR changes several. Fails with a message otherwise.
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed-files"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty) | @json' > "$RUNNER_TEMP/changed-files"
           PR_TITLE=$(gh pr view $PR_NUMBER --json title --jq '.title')
           TOOL_DIR=$(gxy-tool-bot find-tool-dir --changed-files "$RUNNER_TEMP/changed-files" --title="$PR_TITLE")
           echo "tool_dir=$TOOL_DIR" >> $GITHUB_OUTPUT

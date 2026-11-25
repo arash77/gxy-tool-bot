@@ -111,7 +111,7 @@ def test_refuses_unsafe_name(tools: Path) -> None:
 
 def test_cli_prints_only_the_path(tools: Path, tmp_path: Path) -> None:
     changed = tmp_path / "changed.txt"
-    changed.write_text("tools/image_processing/imagej2/imagej2_crop.xml\n")
+    changed.write_text('"tools/image_processing/imagej2/imagej2_crop.xml"\n')
     result = CliRunner().invoke(cli, ["find-tool-dir", "--changed-files", str(changed),
                                       "--title", "imagej2: x", "--tools-dir", str(tools)])
     assert result.exit_code == 0, result.output
@@ -120,8 +120,66 @@ def test_cli_prints_only_the_path(tools: Path, tmp_path: Path) -> None:
 
 def test_cli_fails_with_message(tools: Path, tmp_path: Path) -> None:
     changed = tmp_path / "changed.txt"
-    changed.write_text("README.md\n")
+    changed.write_text('"README.md"\n')
     result = CliRunner().invoke(cli, ["find-tool-dir", "--changed-files", str(changed),
                                       "--tools-dir", str(tools)])
     assert result.exit_code == 1
     assert "no file in a tool folder" in result.output
+
+
+def test_cli_newline_in_a_name_adds_no_path(tools: Path, tmp_path: Path) -> None:
+    changed = tmp_path / "changed.txt"
+    changed.write_text('"tools/image_processing/imagej2/imagej2_crop.xml"\n'
+                       '"x\\ntools/samblaster/samblaster.xml"\n')
+    result = CliRunner().invoke(cli, ["find-tool-dir", "--changed-files", str(changed),
+                                      "--tools-dir", str(tools)])
+    assert result.exit_code == 0, result.output
+    assert result.output == "image_processing/imagej2\n"
+
+
+def test_only_tool_root_elements_count(tmp_path: Path) -> None:
+    t = tmp_path / "tools"
+    # Shed-less tool whose test-data and scripts hold non-tool XML.
+    _tool(t, "nos", shed=None)
+    (t / "nos/test-data").mkdir()
+    (t / "nos/test-data/out.xml").write_text("<result/>")
+    (t / "nos/scripts").mkdir()
+    (t / "nos/scripts/helper.xml").write_text("<config/>")
+    assert find_tool_dir(t, ["tools/nos/test-data/out.xml"]) == "nos"
+    assert find_tool_dir(t, ["tools/nos/scripts/helper.xml"]) == "nos"
+    # A category with a tool_conf.xml is not a tool.
+    (t / "cat2/newtool").mkdir(parents=True)
+    (t / "cat2/tool_conf.xml").write_text("<toolbox/>")
+    (t / "cat2/newtool/README").write_text("")
+    with pytest.raises(ToolDirError, match="no file in a tool folder"):
+        find_tool_dir(t, ["tools/cat2/newtool/README"])
+    # Declaration, BOM and comments before <tool>; any file name.
+    _tool(t, "decl", xml="run_macros_tool.xml")
+    (t / "decl/run_macros_tool.xml").write_text(
+        '\ufeff<?xml version="1.0"?>\n<!-- license -->\n<tool id="x">', encoding="utf-8")
+    assert find_tool_dir(t, ["tools/decl/run_macros_tool.xml"]) == "decl"
+
+
+def test_suite_shed_above_tools(tmp_path: Path) -> None:
+    t = tmp_path / "tools"
+    (t / "suite").mkdir(parents=True)
+    (t / "suite/.shed.yml").write_text("name: suite\n")
+    (t / "suite/macros.xml").write_text("<macros/>")
+    _tool(t, "suite/toolA", shed=None)
+    assert find_tool_dir(t, ["tools/suite/toolA/tool.xml"]) == "suite/toolA"
+
+
+def test_title_forms(tools: Path) -> None:
+    changed = ["tools/samblaster/samblaster.xml",
+               "tools/image_processing/imagej2/imagej2_crop.xml"]
+    for title in ("tools/image_processing/imagej2: x", "image_processing/imagej2/: x"):
+        assert find_tool_dir(tools, changed, title) == "image_processing/imagej2"
+
+
+def test_refuses_symlinked_tools_dir(tmp_path: Path) -> None:
+    real = tmp_path / "elsewhere"
+    _tool(real, "evil")
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "repo/tools").symlink_to(real)
+    with pytest.raises(ToolDirError, match="symlink"):
+        find_tool_dir(tmp_path / "repo/tools", ["tools/evil/tool.xml"])

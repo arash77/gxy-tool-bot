@@ -438,7 +438,7 @@ def generate(issue: int, config_path: str, output_dir: str, actor: str | None, c
 
 @cli.command(name="find-tool-dir")
 @click.option("--changed-files", "changed_files", type=click.File(), required=True,
-              help="File listing the PR's changed paths, one per line ('-' for stdin)")
+              help="File of the PR's changed paths, one JSON string per line ('-' for stdin)")
 @click.option("--title", default="",
               help="PR title; its 'name:' prefix picks among several tool folders")
 @click.option("--tools-dir", "tools_dir", type=click.Path(exists=True, file_okay=False),
@@ -447,9 +447,10 @@ def find_tool_dir_cmd(changed_files, title: str, tools_dir: str) -> None:
     """Print the tool folder (relative to --tools-dir) a PR works on."""
     from gxy_tool_bot.tool_dir import ToolDirError, find_tool_dir
 
+    # JSON strings, so a newline in a file name can't add a path.
+    paths = [json.loads(line) for line in changed_files.read().split("\n") if line.strip()]
     try:
-        click.echo(find_tool_dir(Path(tools_dir), changed_files.read().splitlines(), title,
-                                 tools_prefix=Path(tools_dir).name))
+        click.echo(find_tool_dir(Path(tools_dir), paths, title, tools_prefix=Path(tools_dir).name))
     except ToolDirError as e:
         raise click.ClickException(str(e)) from e
 
